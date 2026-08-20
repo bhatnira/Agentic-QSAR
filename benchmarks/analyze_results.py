@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RESULTS_ROOT = ROOT / "benchmarks" / "results"
 ANALYSIS_ROOT = ROOT / "benchmarks" / "analysis"
 
-SCENARIOS = ["grid", "agent-mock", "agent-nosearch", "agent-nogate", "agent-nvidia"]
+SCENARIOS = ["grid", "agent-mock", "agent-nosearch", "agent-nogate", "agent-nvidia", "agent-evolve"]
 TASKS = {"esol": "regression", "freesolv": "regression", "lipophilicity": "regression",
          "bace": "binary", "bbbp": "binary", "clintox": "binary"}
 
@@ -147,6 +147,7 @@ def build(args: argparse.Namespace) -> int:
         ("nogate-vs-grid", "agent-nogate", "grid"),
         ("search-on-vs-off", "agent-mock", "agent-nosearch"),
         ("gate-on-vs-off", "agent-mock", "agent-nogate"),
+        ("evolve-vs-frozen", "agent-evolve", "agent-mock"),
         ("nvidia-vs-mock", "agent-nvidia", "agent-mock"),
     ]
     lines = ["ablation,dataset,delta_mean,delta_median,delta_std,n_pairs"]

@@ -18,6 +18,7 @@ from cta_qsar.knowledge.facts import (
     Fact,
     dataset_class,
 )
+from cta_qsar.knowledge.graph import KnowledgeGraph, render_graph_summary
 from cta_qsar.knowledge.ingestor import ingest_jsonl, ingest_results_file
 from cta_qsar.knowledge.static_builder import build_registry_facts, registry_version
 
@@ -27,6 +28,8 @@ __all__ = [
     "MIN_EVIDENCE",
     "WINDOW_SIZE",
     "dataset_class",
+    "KnowledgeGraph",
+    "render_graph_summary",
     "build_registry_facts",
     "registry_version",
     "ingest_results_file",

@@ -15,8 +15,15 @@ def evaluate_stopping(
     plan_round: int,
     experiments: list[dict[str, Any]],
     no_improvement_rounds: int,
+    settle_delta: float = 0.005,
 ) -> list[str]:
-    """Return a list of stop reasons (empty => continue)."""
+    """Return a list of stop reasons (empty => continue).
+
+    ``settle_delta`` is the "negligible improvement" threshold below which the
+    latest experiment counts as settled; the self-improving planner learns it
+    per dataset class from the observed improvement distribution, otherwise
+    the hardcoded 0.005 default is used.
+    """
     reasons: list[str] = []
 
     max_experiments = budget.get("max_experiments", 12)
@@ -35,8 +42,9 @@ def evaluate_stopping(
         last = experiments[-1].get("metrics", {})
         prev = experiments[-2].get("metrics", {})
         key = _primary_key(last, prev)
-        if key and _improvement(last, prev, key) < 0.005:
+        if key and _improvement(last, prev, key) < settle_delta:
             reasons.append("improvement negligible in latest experiment")
+            reasons.append(f"settle-delta policy threshold: {settle_delta}")
 
     if plan_round >= 4:
         reasons.append("no unexplored applicable strategies remain (round cap)")
@@ -56,6 +64,22 @@ def _improvement(last: dict[str, Any], prev: dict[str, Any], key: str) -> float:
     return last[key] - prev[key]
 
 
+def compute_marginal_gain(experiments: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+    """Realized improvement of the latest completed experiment over the previous one.
+
+    Returns ``(gain, primary_key)`` where gain > 0 means better. Used by the
+    self-improving planner to learn from the executed trace.
+    """
+    if len(experiments) < 2:
+        return None, None
+    last = experiments[-1].get("metrics", {})
+    prev = experiments[-2].get("metrics", {})
+    key = _primary_key(last, prev)
+    if not key:
+        return None, None
+    return _improvement(last, prev, key), key
+
+
 def decide_next(
     *,
     budget: dict[str, Any],
@@ -64,6 +88,7 @@ def decide_next(
     no_improvement_rounds: int,
     candidates_remaining: int,
     llm_stop: dict[str, Any] | None = None,
+    settle_delta: float = 0.005,
 ) -> str:
     """Return 'finalize_report' or 'plan_experiment'."""
     reasons = evaluate_stopping(
@@ -71,6 +96,7 @@ def decide_next(
         plan_round=plan_round,
         experiments=experiments,
         no_improvement_rounds=no_improvement_rounds,
+        settle_delta=settle_delta,
     )
     if candidates_remaining <= 0 and len(experiments) > 0:
         reasons.append("no unexplored applicable strategies remain")

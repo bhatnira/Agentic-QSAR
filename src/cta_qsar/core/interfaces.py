@@ -315,13 +315,19 @@ class ExperimentCandidate(BaseModel):
     utility: float = 0.0
     reason: str = ""
     llm_rationale: str = ""
+    policy_weights: dict[str, float] = Field(default_factory=dict)
 
-    def compute_utility(self) -> float:
+    def compute_utility(self, policy_weights: dict[str, float] | None = None) -> float:
         denom = max(self.compute_cost, 1e-6)
+        weights = policy_weights or {
+            "weight_improvement": 1.0,
+            "weight_information": 1.0,
+            "weight_trust": 1.0,
+        }
         value = (
-            self.expected_improvement
-            + self.expected_information_gain
-            + self.expected_trustworthiness_gain
+            weights.get("weight_improvement", 1.0) * self.expected_improvement
+            + weights.get("weight_information", 1.0) * self.expected_information_gain
+            + weights.get("weight_trust", 1.0) * self.expected_trustworthiness_gain
         )
         self.utility = value / denom
         return self.utility

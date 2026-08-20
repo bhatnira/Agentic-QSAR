@@ -319,14 +319,36 @@ def plan_experiment(state: dict[str, Any]) -> dict[str, Any]:
     knowledge = config.knowledge
     kg_context = ""
     evidence_facts: list[Any] = []
+    kg_adjacency: list[dict[str, Any]] = []
     if knowledge.enabled and knowledge.evidence_path:
         evidence_facts, kg_context = _load_knowledge_facts(
             knowledge.evidence_path, case.task_type, case.dataset_size
         )
         evidence_facts = evidence_facts or []
         kg_context = kg_context or render_evidence_board(evidence_facts)
+        from cta_qsar.knowledge.facts import EvidenceStore
+        from cta_qsar.knowledge.graph import KnowledgeGraph, render_graph_summary
+
+        store = EvidenceStore.load(knowledge.evidence_path)
+        local_kg = KnowledgeGraph.from_sources(store, registry=get_context().registry)
+        bucket = _knowledge_dataset_class(case)
+        kg_adjacency = local_kg.adjacency(bucket)
+        graph_digest = render_graph_summary(local_kg, dataset_class=bucket)
+        kg_context = f"{kg_context}\n{graph_digest}" if kg_context else graph_digest
 
     planner = PlannerAgent(registry, llm)
+    policy_weights: dict[str, float] | None = None
+    if getattr(config.policy, "adaptive", False):
+        from cta_qsar.policy.state import PolicyStore
+
+        policy_cfg = config.policy
+        path_str = str(policy_cfg.policy_state_path or "")
+        if not path_str:
+            evidence_path = getattr(config.knowledge, "evidence_path", "")
+            base = Path(evidence_path or config.reporting.get("output_dir", "runs"))
+            path_str = str(base / "policy_state.jsonl")
+        bucket = _knowledge_dataset_class(case)
+        policy_weights = PolicyStore.load(path_str).get(bucket).weights
     candidates, llm_refined = planner.plan(
         case=case,
         enabled_representations=config.representations.get("enabled"),
@@ -339,6 +361,7 @@ def plan_experiment(state: dict[str, Any]) -> dict[str, Any]:
         hardware_tier="cpu",
         kg_context=kg_context,
         evidence_facts=evidence_facts,
+        policy_weights=policy_weights,
     )
     if llm_refined:
         candidates = llm_refined + [c for c in candidates if c not in llm_refined]
@@ -353,6 +376,7 @@ def plan_experiment(state: dict[str, Any]) -> dict[str, Any]:
             "facts": [f.to_dict() for f in evidence_facts],
             "rendered": kg_context,
             "round": state.get("plan_round", 0),
+            "adjacency": kg_adjacency,
         }
     if chosen is None:
         if budget.experiments_done >= budget.max_experiments:
@@ -513,6 +537,84 @@ def evaluate_trust(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def adapt_policy(state: dict[str, Any]) -> dict[str, Any]:
+    """12b. Self-improving planner policy update (off when not adaptive).
+
+    Deterministic meta-adaptation: after each completed iteration compare the
+    executed candidate's predicted signals with the realized marginal gain,
+    re-weight the planner's value signals, and re-calibrate the settle
+    threshold from the class's improvement history. Every update is recorded
+    as a ``policy_update`` trace event; weights stay bounded so adaptation can
+    never invert the planner's ranking.
+    """
+    from cta_qsar.orchestration.policies import compute_marginal_gain
+    from cta_qsar.policy.state import PolicyStore
+    from cta_qsar.policy.updates import apply_update
+
+    config: Config = state["config"]
+    if not getattr(config.policy, "adaptive", False):
+        return state
+    experiments = [_plain(e) for e in state.get("experiments", [])]
+    completed = [e for e in experiments if e.get("result") == "completed"]
+    candidate = state.get("selected_candidate")
+    if candidate is None or len(completed) < 2:
+        return state
+    gain, key = compute_marginal_gain(completed)
+    if gain is None:
+        return state
+    from cta_qsar.knowledge.facts import dataset_class as _dataset_class_bucket
+
+    profile = state.get("profile", {})
+    endpoint = state.get("endpoint", {})
+    dataset_class = _dataset_class_bucket(
+        endpoint.get("task_type", "regression"), profile.get("n_rows", 0)
+    )
+
+    predicted = {
+        "weight_improvement": float(candidate.get("expected_improvement", 0.0)),
+        "weight_information": float(candidate.get("expected_information_gain", 0.0)),
+        "weight_trust": float(candidate.get("expected_trustworthiness_gain", 0.0)),
+    }
+    policy_cfg = config.policy
+    path_str = str(policy_cfg.policy_state_path or "")
+    if not path_str:
+        evidence_path = getattr(config.knowledge, "evidence_path", "")
+        base = Path(evidence_path or config.reporting.get("output_dir", "runs"))
+        path_str = str(base / "policy_state.jsonl")
+    store = PolicyStore.load(path_str)
+    pstate = store.get(dataset_class)
+    apply_update(
+        pstate,
+        predicted=predicted,
+        realized_improvement=gain,
+        learning_rate=policy_cfg.learning_rate,
+        quantile=policy_cfg.delta_quantile,
+        window=policy_cfg.delta_window,
+        bounds=(policy_cfg.weight_min, policy_cfg.weight_max),
+    )
+    store.update(dataset_class, pstate)
+    store.save()
+    run_id = state.get("run_id", make_run_id())
+    run_dir = Path(state.get("output_dir") or config.reporting.get("output_dir", "runs")) / run_id
+    from cta_qsar.knowledge.explain import append_trace
+
+    append_trace(
+        {
+            "type": "policy_update",
+            "dataset_class": dataset_class,
+            "primary_key": key,
+            **(pstate.last_event or {}),
+        },
+        run_dir / "plan_trace.jsonl",
+    )
+    agent_log(
+        "policy",
+        f"updated {dataset_class}: {pstate.last_event.get('weights')} "
+        f"settle_delta={pstate.last_event.get('settle_delta')}",
+    )
+    return state
+
+
 def diagnose_failure(state: dict[str, Any]) -> dict[str, Any]:
     """13. Diagnose weaknesses (deterministic + LLM)."""
     from cta_qsar.agents.diagnosis_agent import DiagnosisAgent
@@ -568,6 +670,24 @@ def decide_next_action(state: dict[str, Any]) -> str:
             "max_minutes": config.compute.max_minutes,
             "elapsed_minutes": 0.0,
         }
+    settle_delta = 0.005
+    if getattr(config.policy, "adaptive", False):
+        from cta_qsar.knowledge.facts import dataset_class as _dataset_class_bucket
+        from cta_qsar.policy.state import PolicyStore
+
+        policy_cfg = config.policy
+        path_str = str(policy_cfg.policy_state_path or "")
+        if not path_str:
+            evidence_path = getattr(config.knowledge, "evidence_path", "")
+            base = Path(evidence_path or config.reporting.get("output_dir", "runs"))
+            path_str = str(base / "policy_state.jsonl")
+        profile = state.get("profile", {})
+        endpoint = state.get("endpoint", {})
+        bucket = _dataset_class_bucket(
+            endpoint.get("task_type", "regression"), profile.get("n_rows", 0)
+        )
+        store = PolicyStore.load(path_str)
+        settle_delta = store.effective_settle_delta(bucket)
     llm = get_context().llm
     llm_stop: dict[str, Any] | None = None
     if llm is not None:
@@ -606,6 +726,7 @@ def decide_next_action(state: dict[str, Any]) -> str:
         no_improvement_rounds=no_improvement_rounds,
         candidates_remaining=max(candidates_remaining, 0),
         llm_stop=llm_stop,
+        settle_delta=settle_delta,
     )
     decision = _apply_trust_gate(
         decision,
@@ -749,7 +870,7 @@ def finalize_report(state: dict[str, Any]) -> dict[str, Any]:
                 "evidence": knowledge_context.get("facts", []),
                 "winner": None,
                 "winner_boost": None,
-                "adjacency": [],
+                "adjacency": knowledge_context.get("adjacency", []),
             },
             run_dir / "plan_trace.jsonl",
         )

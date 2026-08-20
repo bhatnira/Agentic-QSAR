@@ -146,6 +146,15 @@ class EvidenceStore:
     def edge_exists(self, subject: str, predicate: str, object: str) -> bool:
         return self.fact(subject, predicate, object) is not None
 
+    def facts_all(self) -> list[Fact]:
+        """Every aggregate triple as a Fact, deterministic (s, p, o) order."""
+        rows = []
+        for subject, predicate, object in sorted(self._windows):
+            fact = self.fact(subject, predicate, object)
+            if fact is not None:
+                rows.append(fact)
+        return rows
+
     def _predicates(self, subject: str) -> set[str]:
         return {p for (s, p, o) in self._windows if s == subject}
 

@@ -27,3 +27,5 @@ htmlcov/
 benchmarks/*
 !benchmarks/run_benchmark.py
 !benchmarks/analyze_results.py
+!benchmarks/recover_results.py
+!benchmarks/run_challenge.py

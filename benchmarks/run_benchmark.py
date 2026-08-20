@@ -291,12 +291,22 @@ def run_agent(
     search: bool,
     llm_provider: str = "mock",
     trust_gate: bool = True,
+    adaptive_policy: bool = False,
 ) -> dict[str, Any]:
     """One full autonomous run at the given seed (provider mock|nvidia).
 
     ``trust_gate=False`` disables the trust gate (ablation): the agent may
     finalize as soon as the stopping policy triggers, regardless of whether
     the latest validated strategy is trustworthy.
+
+    ``adaptive_policy=True`` enables the self-improving planner (scenario
+    ``agent-evolve``): utility weights and the settle-delta threshold are
+    re-learned from observed marginal gains after every iteration. In the
+    spirit of the OPEN ADMET challenge, this is a *shared* evolutionary
+    process -- a single global policy store (namespaced by dataset class) that
+    every run contributes to and reads from; knowledge accumulates and the
+    planner policy evolves across the whole campaign instead of isolated
+    per-run entities competing.
     """
     from cta_qsar.agents.scientist import QSARScientist
 
@@ -315,6 +325,9 @@ def run_agent(
         config.dataset.target_columns = list(dataset.target_columns)
     config.reporting["output_dir"] = str(RUNS_ROOT)
     config.knowledge.evidence_path = str(KNOWLEDGE_EVIDENCE)
+    if adaptive_policy:
+        config.policy.adaptive = True
+        config.policy.policy_state_path = str(KNOWLEDGE_EVIDENCE.parent / "policy_state.jsonl")
     if not trust_gate:
         config.trust.required = []
     data_csv = DATA_DIR / f"{dataset.name}_seed{seed}.csv"
@@ -338,6 +351,8 @@ def run_agent(
         raise RuntimeError(f"no completed experiments for {dataset.name} seed {seed}")
     if llm_provider == "nvidia":
         scenario = "agent-nvidia"
+    elif adaptive_policy:
+        scenario = "agent-evolve"
     elif not search:
         scenario = "agent-nosearch"
     elif not trust_gate:
@@ -381,9 +396,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--datasets", default="esol", help="comma-separated subset of esol,freesolv,lipophilicity,bace,bbbp,clintox")
     parser.add_argument("--seeds", default="0,1", help="comma-separated random seeds")
     parser.add_argument("--scenarios", default="grid,agent-mock",
-                        help="comma-separated: grid,agent-mock,agent-nosearch,agent-nvidia,agent-nogate")
+                        help="comma-separated: grid,agent-mock,agent-nosearch,agent-nvidia,agent-nogate,agent-evolve")
     parser.add_argument("--fresh-evidence", action="store_true",
-                        help="start the knowledge evidence store from zero (ignore prior results dirs)")
+                        help="start the knowledge evidence + policy state from zero (ignore prior results dirs)")
     parser.add_argument("--resume", action="store_true",
                         help="skip (dataset, seed, scenario) combos already present in the most recent results.csv")
     args = parser.parse_args(argv)
@@ -391,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
     datasets = [DATASETS[name] for name in args.datasets.split(",") if name in DATASETS]
     seeds = [int(s) for s in args.seeds.split(",")]
     scenarios = [s for s in args.scenarios.split(",")
-                 if s in ("grid", "agent-mock", "agent-nosearch", "agent-nvidia", "agent-nogate")]
+                 if s in ("grid", "agent-mock", "agent-nosearch", "agent-nvidia", "agent-nogate", "agent-evolve")]
     if not datasets or not seeds or not scenarios:
         parser.error("need valid --datasets, --seeds, --scenarios")
     if "agent-nvidia" in scenarios and not any(
@@ -416,9 +431,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.fresh_evidence:
         from cta_qsar.knowledge.facts import EvidenceStore
+        from cta_qsar.policy.state import PolicyStore
 
         EvidenceStore().save(KNOWLEDGE_EVIDENCE)
-        print("fresh evidence: knowledge store reset to empty", flush=True)
+        policy_path = KNOWLEDGE_EVIDENCE.parent / "policy_state.jsonl"
+        PolicyStore(policy_path).save()
+        print("fresh evidence: knowledge + policy state reset to empty (cold-start)", flush=True)
         refresh_evidence(roots=[out_dir])
     else:
         refresh_evidence()
@@ -433,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
         "notes": ["agent scenarios: heuristic planner (mock LLM) or real NVIDIA LLM, hyperparameter search on",
                   "agent-nosearch: agent with hyperparameter search disabled (ablation)",
                   "agent-nogate: agent with the trust gate disabled (ablation)",
+                  "agent-evolve: OPEN-ADMET-style shared policy evolution (global store, namespaced by dataset class)",
                   "trust gate enforced unless trust.required is empty",
                   "grid scenario: static hyperparameter grid, identical folds/metrics"],
     }
@@ -454,9 +473,10 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         result = run_agent(
                             df, dataset, seed,
-                            search=(scenario in ("agent-mock", "agent-nogate", "agent-nvidia")),
+                            search=(scenario in ("agent-mock", "agent-nogate", "agent-nvidia", "agent-evolve")),
                             llm_provider=("nvidia" if scenario == "agent-nvidia" else "mock"),
                             trust_gate=(scenario != "agent-nogate"),
+                            adaptive_policy=(scenario == "agent-evolve"),
                         )
                     result.update({"dataset": dataset.name, "task_type": dataset.task_type, "rows": len(df)})
                     rows.append(result)

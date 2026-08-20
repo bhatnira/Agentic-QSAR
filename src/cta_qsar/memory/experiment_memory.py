@@ -79,12 +79,13 @@ def run_output_dir(output_root: str | Path, run_id: str) -> Path:
     return Path(output_root) / run_id
 
 
-def make_run_id(dataset_name: str | None = None) -> str:
+def make_run_id(dataset_name: str | None = None, suffix: str = "") -> str:
     import datetime
 
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     name = (dataset_name or "run").replace("/", "_").replace(".", "_")[:40]
-    return f"{stamp}-{name}"
+    tag = f"-{suffix}" if suffix else ""
+    return f"{stamp}-{name}{tag}"
 
 
 def write_provenance(run_dir: Path, payload: dict[str, Any]) -> None:

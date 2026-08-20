@@ -739,6 +739,53 @@ paper_run_nvidia2.log finish; run the extension campaign
 (--datasets tox21,pampa3,pxr --seeds 0-4 --scenarios grid,agent-mock
 --fresh-evidence); finalize the txt; update section 13/14 numbers.
 
+15. FEDERATION + IN-MEMORY KNOWLEDGE GRAPH + EVOLUTION (2026-08-20)
+--------------------------------------------------------------------------------
+User's vision (explicit): when a dataset is fed, multiple agents with the
+best possible strategies independently build the total and COMPETE; the
+knowledge produced is accumulated "in memory knowledge graph" and the system
+EVOLVES -- the OPEN ADMET challenge model (shared accumulating knowledge, not
+isolated per-run entities). Implemented (uncommitted, working tree):
+
+  - knowledge/graph.py: KnowledgeGraph = NetworkX MultiDiGraph overlay on the
+    EvidenceStore (+ registry/curated facts); nodes = dataset classes,
+    strategies, plugins; edges = predicates with value/n/sign/level/source;
+    stats/neighbors/adjacency/best_for/edge_set/diff_edge_set; JSONL persist;
+    render_graph_summary feeds the planner prompt; the previously dead
+    "adjacency" trace field is now real (planned per round). EvidenceStore
+    gained facts_all(). (networkx was already in requirements.lock, unused.)
+  - federation/ (cards.py, core.py): StrategyCard (fixed, explainable cards:
+    gate:aggressive, fast:nosearch, gate:none, evolve, llm:nvidia-gated);
+    ChallengeSession runs cards independently+sequentially over one dataset,
+    builds leaderboard (primary metric, best-of = the total), digests every
+    agent outcome into the shared evidence store AFTER each agent (later
+    agents plan on strictly more knowledge), merges the in-memory KG, and
+    reports kg_before/kg_after/diff per challenge. run id: the harness now
+    writes per-card CSVs so run dirs cannot collide (make_run_id second-
+    resolution was the hazard).
+  - Evolution: the existing policy layer (weights + settle-delta, section 14
+    pending) is the engine; the "evolve" card runs adaptive=True on the
+    shared benchmarks/knowledge/policy_state.jsonl, so per-class weight and
+    settle-threshold updates persist across entire challenges.
+  - CLI: benchmarks/run_challenge.py (--datasets --seeds --cards
+    --with-nvidia --fresh-evidence) -> benchmarks/challenges/<stamp>/
+    challenge_<ds>_seed<n>.json + challenge_leaderboard.csv + kg_*.jsonl.
+  - Tests: tests/unit/test_knowledge_graph.py (13) + test_federation.py (10):
+    build/read/persist/diff, best_for, leaderboard order incl. failed agents,
+    accumulation visible to a fresh session, registry capability edges. KB
+    unit set (99 tests incl. policy/planner/knowledge/extensions) green;
+    ruff clean; full-suite + integration deferred (machine saturated).
+  - Smoke: challenge esol seed 0, cards fast:nosearch,gate:aggressive,evolve
+    (--fresh-evidence) launched ~pid 74841, log
+    benchmarks/logs/challenge_smoke.log; expected: leaderboard + KG edges
+    growing between agents + policy_state.jsonl written by the evolve card.
+  - Paper: new section 7 (FEDERATED COMPETITION AND KNOWLEDGE EVOLUTION)
+    with Table 6 skeleton; reproducibility now section 8.
+
+Next steps: verify smoke challenge (leaderboard, per-agent evidence growth,
+policy updates, no FAILED); commit this work once the user is happy; fill
+Tables 1-5 + 6, finalize paper; update section 13/14 numbers.
+
 ================================================================================
 END OF REPORT
 ================================================================================

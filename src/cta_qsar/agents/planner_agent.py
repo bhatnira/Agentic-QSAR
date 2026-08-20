@@ -36,12 +36,15 @@ class PlannerAgent:
         hardware_tier: str,
         kg_context: str = "",
         evidence_facts: list[Any] | None = None,
+        policy_weights: dict[str, float] | None = None,
     ) -> tuple[list[ExperimentCandidate], list[ExperimentCandidate]]:
         """Return (ranked_candidates, rejected_candidates).
 
         ``kg_context`` is a rendered knowledge-graph digest (see
         knowledge.explain.render_evidence_board) grounded into the LLM prompt;
-        ``evidence_facts`` are the raw Facts used for heuristic re-ranking.
+        ``evidence_facts`` are the raw Facts used for heuristic re-ranking;
+        ``policy_weights`` are the self-improving-planner multipliers used in
+        utility ranking (defaults to 1.0 when the policy is frozen).
         """
         candidates = generate_candidates(
             registry=self.registry,
@@ -56,6 +59,7 @@ class PlannerAgent:
             dataset_props=dataset_props,
             hardware_tier=hardware_tier,
             evidence=evidence_facts or [],
+            policy_weights=policy_weights,
         )
         usage = explain_decisions(candidates)
         logger.info("Candidate planning:\n%s", usage)

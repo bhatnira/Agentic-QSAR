@@ -440,7 +440,52 @@ targets is therefore implicit (same representation matrix) rather than
 parameterized.
 
 --------------------------------------------------------------------------------
-7  REPRODUCIBILITY
+7  FEDERATED COMPETITION AND KNOWLEDGE EVOLUTION
+--------------------------------------------------------------------------------
+
+Motivated by community benchmarks such as the OPEN ADMET challenge --
+where independent model-builders contribute to one shared, public body of
+knowledge and models improve as that knowledge accumulates -- we add a
+federation layer on top of the single-agent scientist. When a dataset is
+presented, several *strategy agents* are launched independently over the
+same data; each runs the full autonomous pipeline with its own fixed,
+explainable strategy card (heuristic-vs-LLM planning, hyperparameter search
+on/off, trust gate on/off, self-improving planner policy on/off). Their
+completed builds are ranked on the dataset's primary metric (leaderboard;
+the winner is the submitted total). After every agent, its outcome is
+digested into the shared evidence store and an in-memory knowledge graph
+(NetworkX overlay: dataset classes, strategies and plugins as nodes,
+predicates as attributed edges sourced from evidence, registry metadata and
+curated chemistry priors). Later agents therefore plan over strictly more
+accumulated knowledge; the session's graph diff and the shared policy store
+make the *evolution* legible and auditable: edges added per agent, weight
+and settle-threshold updates per dataset class, and every planning round
+records its live adjacency in plan_trace.jsonl.
+
+Determinism and safety. Cards run in a fixed order; the leaderboard is a
+deterministic sort; the in-memory graph is rebuilt from the persisted
+evidence (JSONL remains the source of truth); self-improvement stays bounded
+(weights clamped to [0.5, 2.0], settle-delta quantile of observed marginal
+gains) and cannot invert the planner's ranking.
+
+Table 6. Challenge leaderboard (primary metric; smoke run, seed 0, esol,
+to be replaced by the 5-seed campaign):
+
+  card            primary_value  model                     n_exp  runtime(s)
+  --------------  -------------  ------------------------  -----  ---------
+  (FILL:)         (FILL:)        (FILL:)                   (FILL:) (FILL:)
+
+(FILL: win/loss pattern across cards; do accumulated ranks beat fresh-start
+ranks (one-vs-one later-order cards) on the shared evidence? report KG
+additions and policy-state updates observed in the smoke run.)
+
+Command:
+
+    python3 benchmarks/run_challenge.py --datasets esol --seeds 0,1,2,3,4 \
+      --cards gate:aggressive,fast:nosearch,gate:none,evolve --fresh-evidence
+
+--------------------------------------------------------------------------------
+8  REPRODUCIBILITY
 --------------------------------------------------------------------------------
 
 - Repository: https://github.com/bhatnira/Agentic-QSAR (commit e8e7511 for the

@@ -62,6 +62,7 @@ def build_graph(
     graph.add_node("execute_experiment", _node(n.execute_experiment))
     graph.add_node("evaluate_performance", _node(n.evaluate_performance))
     graph.add_node("evaluate_trust", _node(n.evaluate_trust))
+    graph.add_node("adapt_policy", _node(n.adapt_policy))
     graph.add_node("diagnose_failure", _node(n.diagnose_failure))
     graph.add_node("propose_intervention", _node(n.propose_intervention))
     graph.add_node("finalize_report", _node(n.finalize_report))
@@ -91,7 +92,8 @@ def build_graph(
     )
 
     graph.add_edge("evaluate_performance", "evaluate_trust")
-    graph.add_conditional_edges("evaluate_trust", route_from_trust, {"diagnose_failure": "diagnose_failure", "finalize_report": "finalize_report"})
+    graph.add_edge("evaluate_trust", "adapt_policy")
+    graph.add_conditional_edges("adapt_policy", route_from_trust, {"diagnose_failure": "diagnose_failure", "finalize_report": "finalize_report"})
     graph.add_conditional_edges("diagnose_failure", route_from_diagnosis, {"propose_intervention": "propose_intervention"})
 
     graph.add_conditional_edges(

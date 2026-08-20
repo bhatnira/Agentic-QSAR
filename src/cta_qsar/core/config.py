@@ -64,6 +64,25 @@ class TrustConfig(BaseModel):
     required: list[str] = Field(default_factory=lambda: ["predictive", "generalization"])
 
 
+class PolicyConfig(BaseModel):
+    """Self-improving planner policy (principled, deterministic adaptation).
+
+    When ``adaptive`` is true the planner re-weights its value signals and
+    re-calibrates its settle threshold from observed marginal gains after each
+    completed iteration. When false (default) behavior is identical to the
+    frozen policy -- weights are 1.0 and the settle delta is the hardcoded
+    0.005.
+    """
+
+    adaptive: bool = False
+    policy_state_path: str = ""
+    learning_rate: float = 0.1
+    weight_min: float = 0.5
+    weight_max: float = 2.0
+    delta_quantile: float = 0.5
+    delta_window: int = 20
+
+
 class TrackingConfig(BaseModel):
     enabled: bool = True
     backend: str = "mlflow"
@@ -102,6 +121,7 @@ class Config(BaseModel):
         default_factory=lambda: {"format": "markdown", "output_dir": "runs"}
     )
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
+    policy: PolicyConfig = Field(default_factory=PolicyConfig)
     tracking: TrackingConfig = Field(default_factory=TrackingConfig)
     env_overrides: ClassVar[dict[str, str]] = {
         "LLM_PROVIDER": "llm.provider",

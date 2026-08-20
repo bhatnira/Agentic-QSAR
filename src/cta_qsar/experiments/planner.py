@@ -38,12 +38,15 @@ def generate_candidates(
     dataset_props: dict[str, Any],
     hardware_tier: str,
     evidence: list[Any] | None = None,
+    policy_weights: dict[str, float] | None = None,
 ) -> list[ExperimentCandidate]:
     """Generate and score candidate experiments (no LLM required).
 
     ``evidence`` is a list of knowledge-layer Facts (Finest-first) used to
     boost strategies with proven performance on this dataset class; it is
-    advisory only and never blocks a candidate.
+    advisory only and never blocks a candidate.  ``policy_weights`` are the
+    learned (or default) self-improving-planner multipliers applied to the
+    three value signals when ranking.
     """
     reps = _resolve_reps(registry, enabled_representations, task_type, n_samples, dataset_props)
     models = _resolve_models(registry, enabled_models, task_type)
@@ -83,6 +86,7 @@ def generate_candidates(
                     hardware_tier=hardware_tier,
                     evidence_bonus=evidence_bonus.get(f"{rep_name}|{model_name}", 0.0)
                     + winner_boost.get(f"{rep_name}|{model_name}", 0.0),
+                    policy_weights=policy_weights,
                 )
                 candidates.append(candidate)
     candidates.sort(key=lambda c: c.utility, reverse=True)
@@ -147,6 +151,7 @@ def _score_candidate(
     dataset_props: dict[str, Any],
     hardware_tier: str,
     evidence_bonus: float = 0.0,
+    policy_weights: dict[str, float] | None = None,
 ) -> ExperimentCandidate:
     runtime = rep_cost.runtime_seconds + model_cost.runtime_seconds
     memory = rep_cost.memory_gb + model_cost.memory_gb
@@ -183,7 +188,7 @@ def _score_candidate(
         compute_cost=round(compute_cost, 3),
         reason=reason,
     )
-    candidate.compute_utility()
+    candidate.compute_utility(policy_weights=policy_weights)
     return candidate
 
 
