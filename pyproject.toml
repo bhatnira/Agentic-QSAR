@@ -28,7 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 gpu = ["torch>=2.1"]
 ml = ["lightgbm>=4.0", "mordred>=1.2", "shap>=0.44", "autogluon>=1.0"]
-dev = ["pytest>=8.0", "pytest-cov>=4.0", "ruff>=0.4"]
+dev = ["pytest>=8.0", "pytest-cov>=4.0", "ruff>=0.4", "build>=1.0", "twine>=5.0", "pip-audit>=2.7", "pre-commit>=3.6"]
 
 [project.scripts]
 cta-qsar = "cta_qsar.cli.main:main"
@@ -45,6 +45,16 @@ markers = [
 filterwarnings = [
     "ignore::UserWarning:langchain_core.*",
 ]
+
+[tool.coverage.run]
+source = ["cta_qsar"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 60
+skip_covered = true
+show_missing = true
+omit = ["*/__init__.py"]
 
 [tool.ruff]
 line-length = 100
