@@ -75,12 +75,14 @@ def classification_metrics(y_true: Any, y_pred: Any, y_proba: Any | None = None)
         roc_auc_score,
     )
 
+    n_classes = len(np.unique(y_true))
+    avg = "binary" if n_classes == 2 else "macro"
     metrics: dict[str, float] = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
-        "f1": float(f1_score(y_true, y_pred, average="binary", zero_division=0)),
+        "f1": float(f1_score(y_true, y_pred, average="binary" if n_classes == 2 else "macro", zero_division=0)),
         "f1_macro": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
-        "f2": float(fbeta_score(y_true, y_pred, beta=2, average="binary", zero_division=0)),
+        "f2": float(fbeta_score(y_true, y_pred, beta=2, average=avg, zero_division=0)),
         "mcc": float(matthews_corrcoef(y_true, y_pred)),
     }
     if y_proba is not None:

@@ -39,6 +39,7 @@ class ComputeConfig(BaseModel):
 class DatasetConfig(BaseModel):
     smiles_column: str | None = None
     target_column: str | None = None
+    target_columns: list[str] | None = None
     max_rows: int = 100_000
     standardize: bool = True
     drop_invalid: bool = False

@@ -16,6 +16,7 @@ from cta_qsar.core.interfaces import ExperimentCandidate, ExperimentRecord
 from cta_qsar.core.logging import get_logger
 from cta_qsar.core.registry import PluginRegistry
 from cta_qsar.experiments.budget import BudgetState
+from cta_qsar.trust.base import primary_metric
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,8 @@ class ExperimentRunner:
         hyperparameter_search: bool = False,
     ) -> None:
         self.registry = registry
-        self.task_type = task_type
+        self.is_multitask = task_type.startswith("multitask_")
+        self.task_type = task_type.removeprefix("multitask_")
         self.n_splits = n_splits
         self.n_repeats = n_repeats
         self.test_fraction = test_fraction
@@ -67,7 +69,19 @@ class ExperimentRunner:
         llm_decision: str = "",
         rationale: str = "",
         extra_tags: dict[str, Any] | None = None,
+        target_columns: list[str] | None = None,
     ) -> ExperimentRecord:
+        if self.is_multitask and target_columns and len(target_columns) > 1:
+            return self._run_multitask(
+                candidate,
+                smiles=smiles,
+                df=df,
+                target_columns=target_columns,
+                budget=budget,
+                llm_decision=llm_decision,
+                rationale=rationale,
+                extra_tags=extra_tags,
+            )
         started = time.time()
         start_mem = _mem_gb()
 
@@ -123,7 +137,7 @@ class ExperimentRunner:
             n_features = getattr(X[0], "n_atoms", None) or len(X[0])
         hyperparams = self._pick_hyperparams(candidate, n_features, budget, X=X, y=y)
         estimator = self._build_estimator(
-            model_plugin, candidate.model, n_features, hyperparams
+            model_plugin, candidate.model, n_features, hyperparams, y=y
         )
 
         # 5. trust evaluation
@@ -145,6 +159,117 @@ class ExperimentRunner:
             tags["dropped_rows"] = drop_reasons
             logger.info(
                 "dropped rows for modeling (with reasons): %s", drop_reasons,
+            )
+        record = ExperimentRecord(
+            id=str(uuid.uuid4())[:8],
+            dataset_hash=self.dataset_hash,
+            preprocessing_version=self.preprocessing_version,
+            representation=candidate.representation,
+            model=candidate.model,
+            hyperparameters=hyperparams,
+            split=candidate.validation,
+            random_seed=self.random_seed,
+            metrics=_extract_primary(trust),
+            trust=trust,
+            runtime_seconds=round(runtime, 2),
+            memory_gb=round(memory, 3),
+            llm_decision=llm_decision,
+            rationale=rationale,
+            result="completed",
+            tags=tags,
+        )
+        budget.record(runtime, memory)
+        return record
+
+    def _run_multitask(
+        self,
+        candidate: ExperimentCandidate,
+        *,
+        smiles: list[str],
+        df: Any,
+        target_columns: list[str],
+        budget: BudgetState,
+        llm_decision: str = "",
+        rationale: str = "",
+        extra_tags: dict[str, Any] | None = None,
+    ) -> ExperimentRecord:
+        """Train one estimator per aligned target column; metrics are the
+        mean across targets (folds and hyperparameters are shared)."""
+        started = time.time()
+        start_mem = _mem_gb()
+
+        rep_plugin = self.registry.get("representation", candidate.representation)
+        model_plugin = self.registry.get("model", candidate.model)
+
+        drop_reasons: dict[str, int] = {}
+        valid = np.ones(len(df), dtype=bool)
+        if "smiles_valid" in df.columns:
+            mask = df["smiles_valid"].fillna(False).to_numpy()
+            n_bad = int((~mask).sum())
+            if n_bad:
+                drop_reasons["invalid_smiles"] = n_bad
+            valid &= mask
+        for col in target_columns:
+            raw = df[col]
+            if self.task_type in ("binary", "multiclass"):
+                missing = raw.isna() | (raw.astype(str).str.strip() == "")
+            else:
+                missing = pd.to_numeric(raw, errors="coerce").isna()
+            n_missing = int(missing.sum())
+            if n_missing:
+                drop_reasons[f"missing_target:{col}"] = n_missing
+            valid &= (~missing).to_numpy()
+        if ~valid.all():
+            df = df[valid].reset_index(drop=True)
+            smiles = [s for s, ok in zip(smiles, valid, strict=False) if ok]
+        y_list: list[np.ndarray] = []
+        for col in target_columns:
+            if self.task_type in ("binary", "multiclass"):
+                y_list.append(_encode_labels(df[col].to_numpy()))
+            else:
+                y_list.append(pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float))
+
+        X = self._featurize(rep_plugin, smiles, candidate.representation)
+        validation_plugin = self.registry.get("validation", candidate.validation)
+        splits = self._make_splits(validation_plugin, df, y_list[0], candidate.validation)
+        self._folds_cache = splits
+
+        if hasattr(X, "shape"):
+            n_features = X.shape[1]
+        else:
+            n_features = getattr(X[0], "n_atoms", None) or len(X[0])
+        hyperparams = self._pick_hyperparams(
+            candidate, n_features, budget, X=X, y=y_list[0], targets=y_list
+        )
+        trust_list: list[dict[str, Any]] = []
+        for y in y_list:
+            estimator = self._build_estimator(
+                model_plugin, candidate.model, n_features, hyperparams, y=y
+            )
+            trust_list.append(
+                self._evaluate_trust(
+                    estimator=estimator,
+                    rep_plugin=rep_plugin,
+                    X=X,
+                    y=y,
+                    split=validation_plugin,
+                    candidate=candidate,
+                    smiles=smiles,
+                )
+            )
+        trust = _merge_multitask_trust(trust_list)
+
+        runtime = time.time() - started
+        memory = max(_mem_gb() - start_mem, 0.05)
+        tags = dict(extra_tags or {})
+        tags["targets"] = list(target_columns)
+        tags["per_target_primary"] = {}
+        for col, t in zip(target_columns, trust_list, strict=False):
+            pred = t.get("predictive", {})
+            key = pred.get("primary_metric", primary_metric(self.task_type))
+            value = pred.get(key, {}).get("mean")
+            tags["per_target_primary"][col] = (
+                round(float(value), 4) if isinstance(value, (int, float)) else None
             )
         record = ExperimentRecord(
             id=str(uuid.uuid4())[:8],
@@ -215,6 +340,7 @@ class ExperimentRunner:
         budget: BudgetState,
         X: Any | None = None,
         y: Any | None = None,
+        targets: list[np.ndarray] | None = None,
     ) -> dict[str, Any]:
         space = _model_space(self.registry, candidate.model)
         if not space or candidate.hyperparameter_budget <= 1:
@@ -236,22 +362,34 @@ class ExperimentRunner:
             params = dict(zip(names, combo, strict=False))
             estimator = self._build_estimator(
                 self.registry.get("model", candidate.model), candidate.model,
-                n_features, params,
+                n_features, params, y=(targets[0] if targets else y),
             )
-            score = _fold_primary_score(
-                estimator, X, np.asarray(y).ravel(), folds, self.task_type
-            )
+            if targets:
+                run_scores = [
+                    _fold_primary_score(estimator, X, np.asarray(t).ravel(), folds, self.task_type)
+                    for t in targets
+                ]
+                score = float(np.mean(run_scores))
+            else:
+                score = _fold_primary_score(
+                    estimator, X, np.asarray(y).ravel(), folds, self.task_type
+                )
             if best_score is None or score > best_score:
                 best_score, best_params = score, params
         logger.info("grid search %s -> %s (score=%.4f)", candidate.model, best_params, best_score or 0.0)
         return best_params
 
-    def _build_estimator(self, model_plugin: Any, model_name: str, n_features: int, hyperparams: dict[str, Any]) -> Any:
+    def _build_estimator(
+        self, model_plugin: Any, model_name: str, n_features: int,
+        hyperparams: dict[str, Any], y: Any | None = None,
+    ) -> Any:
         from cta_qsar.models.registry import build_estimator, wrapped_estimator
 
         n_classes = None
-        if self.task_type in ("binary", "multiclass"):
-            n_classes = 2 if self.task_type == "binary" else None
+        if self.task_type == "binary":
+            n_classes = 2
+        elif self.task_type == "multiclass" and y is not None:
+            n_classes = int(len(np.unique(np.asarray(y).ravel())))
         if model_name in ("gcn", "gat", "mpnn"):
             return build_estimator(self.registry, model_name, self.task_type, n_classes=n_classes, hyperparams=hyperparams)
         return wrapped_estimator(self.registry, model_name, self.task_type, n_classes=n_classes, hyperparams=hyperparams)
@@ -340,6 +478,45 @@ def _model_space(registry: PluginRegistry, model_name: str) -> dict[str, list[An
 def _encode_labels(y: np.ndarray) -> np.ndarray:
     uniques, inverse = np.unique(np.asarray(y), return_inverse=True)
     return inverse.astype(int)
+
+
+def _merge_multitask_trust(trust_list: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge per-target trust outputs: metric means are averaged, stds take
+    the maximum (conservative), scalar flags come from the first output."""
+    if not trust_list:
+        return {}
+    if len(trust_list) == 1:
+        return trust_list[0]
+    merged = dict(trust_list[0])
+    for plugin_key in merged:
+        if not all(isinstance(t.get(plugin_key), dict) for t in trust_list):
+            continue
+        first = merged[plugin_key]
+        if not isinstance(first, dict) or not first:
+            continue
+        out: dict[str, Any] = {}
+        for metric_key, metric_val in first.items():
+            if isinstance(metric_val, dict) and "mean" in metric_val:
+                vals = [
+                    t[plugin_key][metric_key]
+                    for t in trust_list
+                    if isinstance(t.get(plugin_key, {}).get(metric_key), dict)
+                    and "mean" in t[plugin_key][metric_key]
+                    and "std" in t[plugin_key][metric_key]
+                ]
+                if not vals:
+                    out[metric_key] = metric_val
+                    continue
+                means = [v["mean"] for v in vals]
+                stds = [v["std"] for v in vals]
+                out[metric_key] = {
+                    "mean": float(np.mean(means)),
+                    "std": float(np.max(stds)),
+                }
+            else:
+                out[metric_key] = metric_val
+        merged[plugin_key] = out
+    return merged
 
 
 def _extract_primary(trust: dict[str, Any]) -> dict[str, Any]:

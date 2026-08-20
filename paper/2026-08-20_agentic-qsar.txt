@@ -1,0 +1,414 @@
+================================================================================
+Agentic QSAR: an autonomous experiment-planning agent for quantitative
+structure-activity relationship model development
+================================================================================
+
+Version: DRAFT v0.1 (2026-08-20)
+Status: results cells pending completion of the 5-seed benchmark campaign
+        (FILL:) markers are concrete results to be inserted after analysis.
+
+--------------------------------------------------------------------------------
+ABSTRACT
+--------------------------------------------------------------------------------
+
+We present Agentic QSAR, a fully autonomous agentic system for developing
+quantitative structure-activity relationship (QSAR) models. Given a dataset,
+molecular representation and a compute budget, the agent plans experiments,
+executes model training with hyperparameter search, evaluates performance under
+multiple cross-validation splits, and reflects on failures and trustworthiness
+of the current best strategy. Three novel components distinguish the system:
+(i) a trust gate that postpones termination until the leading strategy is
+validated as predictive, generalizing, robust and covering the applicability
+domain, instead of stopping at an arbitrary improvement threshold; (ii) a
+read-only knowledge-graph evidence layer that accumulates (fact, subject,
+predicate, object) triples across datasets and reallocates computational effort
+toward strategies with class-level evidence, while never triggering new
+experiments; and (iii) full explainability: every planning decision is
+recorded in a machine-readable trace, and evidence for and against any strategy
+can be rendered as a human-readable decision board.
+
+We benchmark the agent on six standard ADMET/physicochemical datasets (ESOL,
+FreeSolv, Lipophilicity, BACE, BBBP, ClinTox) across five independent seeds
+against a static hyperparameter grid baseline, and through three controlled
+ablations: (a) hyperparameter search on vs off, (b) trust gate on vs off, and
+(c) heuristic vs real-LLM (NVIDIA gpt-oss-20b) strategy selection. (FILL:
+overall improvement summary, e.g., "the agent matched or beat the grid baseline
+on X of 6 datasets...").
+
+Our objective is not to report state-of-the-art predictive accuracy -- the
+benchmark-conditioned comparison is against the identical model library run
+under identical folds -- but to demonstrate that an agentic controller can
+match or exceed a deterministic automated baseline while spending compute
+deliberately, and to provide a reproducible framework for studying agentic
+cheminformatics.
+
+Keywords: QSAR; agentic systems; model development; trust; explainability;
+hyperparameter search.
+
+--------------------------------------------------------------------------------
+1  INTRODUCTION
+--------------------------------------------------------------------------------
+
+QSAR modelling is one of the oldest and most widely applied computational
+techniques in drug discovery. The classical workflow -- descriptor generation,
+model selection, cross-validation, reporting -- is now routinely automated by
+benchmarks such as TDC, MoleculeNet-based pipelines, and AutoML frameworks.
+What is missing is not accuracy but judgement: decisions about what to try
+next, when to stop, whether a model is trustworthy for the intended use, and
+-- critically -- a machine-readable account of why the final model was chosen.
+
+Recent "agentic AI" systems couple large language models (LLMs) with tools and
+execution loops, and several have been proposed for cheminformatics (research
+agents, synthesis planning agents, generalist molecule agents). With a few
+exceptions, these demonstrations emphasize LLM ideation rather than rigorous
+model development, and they rarely confront the discipline of experimental
+budgets, validation protocols, and trust assessment that QSAR practitioners
+need.
+
+We design Agentic QSAR to answer one question: can an autonomous agent build a
+QSAR model as well as, and more transparently than, a deterministic automated
+pipeline, using the same computation budget?
+
+The system is organized as a closed loop (Section 2.1):
+
+  1. PROFILING -- the dataset is characterized (quality, size, task type,
+     chemical space) and validated splits are established.
+  2. PLANNING -- a candidate generator scores every feasible (representation,
+     model, split) strategy under a utility model that blends expected
+     improvement, computational cost, evidence from the knowledge layer, and
+     with-in-run escalation policy. An LLM may re-rank the candidate list.
+  3. EXECUTION -- the chosen strategy is trained under k-fold CV with
+     hyperparameter search, producing a full performance record.
+  4. EVALUATION -- metrics are computed, including generalization and
+     robustness axes beyond the primary score.
+  5. TRUST & DIAGNOSIS -- the strategy is scored on predictive quality,
+     generalization, robustness, and applicability-domain coverage. Failures
+     are diagnosed and fed back to planning (experiments are never re-run).
+  6. TERMINATION -- the trust gate decides whether stopping is acceptable.
+     Stopping is postponed while the leading strategy is untrustworthy on
+     configured axes, up to budget exhaustion.
+
+Contributions. (1) A trust gate that formalizes "when to stop": termination is
+advisory-forced -- it can never veto an experiment, it only postpones
+stopping -- and yields to budget or candidate exhaustion, so no run can loop
+forever. (2) A knowledge-graph evidence layer that accumulates cross-dataset
+facts (e.g., "svr with MACCS keys achieves RMSE 0.68 on regression/small
+datasets") and reallocates planner effort deterministically, with an empty
+store leaving the planner's behaviour unchanged (read-only side car). (3) A
+complete, JSONL-format planning trace per run, enabling exact audit of every
+decision. (4) A public benchmark protocol with fixed seeds, identical folds
+across scenarios, and paired statistical analysis (Wilcoxon signed-rank).
+
+--------------------------------------------------------------------------------
+2  METHODS
+--------------------------------------------------------------------------------
+
+2.1  Agent architecture
+
+The agent is implemented as a state graph over phases (profiling, planning,
+execution, evaluation, trust, diagnosis, termination). Stylized pseudocode:
+
+    loop:
+      profile(dataset)                         # quality, size, task, splits
+      candidates = plan(case, history, budget, kg_evidence)
+      strategy   = top_usable(candidates)      # skips done/failed strategies
+      if strategy is None: stop(reasons)  | plan/feasibility/cost budget
+      record = execute(strategy)               # CV + hyperparameter search
+      verdicts = evaluate_trust(record, case)  # predictive/generalization/
+                                                # robustness/application domain
+      diagnose(record) if record failed
+      decision = decide(candidates_left, no_improvement_rounds, budget, ...)
+      decision = trust_gate(decision, verdicts)
+      if decision == finalize: break
+
+State is staged between nodes; every node commits only its owned channels, and
+the routing bookkeeping is declarative, which is a prerequisite for exact trace
+reproduction.
+
+2.2  Planner and candidate utility
+
+The candidate space is the Cartesian product of enabled molecular
+representations (MACCS keys, Morgan/ECFP fingerprints, RDKit fingerprints, and
+graph encodings where applicable), model families (ridge regression, SVR,
+k-nearest neighbours, random forest, extra trees, gradient-boosted trees
+(lightgbm when available), MLP, and graph neural networks GCN/GAT/MPNN for the
+graph representation), and validated splits (random / stratified / scaffold or
+a subset thereof).
+
+Each (representation, model, split) strategy is scored as
+
+  utility = expected_benefit - cost_penalty + evidence_bonus + escalation_boost
+
+  * expected_benefit: an estimate of the attainable gain on the primary metric
+    relative to the current best completed experiment, informed by the dataset
+    class (task type and size bucket) and validated split history.
+  * cost_penalty: a normalized penalty derived from estimated wall-clock cost
+    (scaling with dataset size, feature dimensionality, and model family).
+  * evidence_bonus: a bounded additive boost (cap 0.25) for strategies with
+    class-level evidence in the knowledge layer: 0.05 per supporting fact plus
+    0.05 per unit of margin above the class aggregate score, capped.
+  * escalation_boost: +0.15 for the best strategy of a representation/model
+    family in which the latest completed experiment already outperformed the
+    incumbent (winner boost) -- an explicit, non-evolutionary strategy
+    escalation policy.
+
+Candidates are ranked by utility; the LLM (when enabled) sees the top 8 ranked
+candidates plus the last 5 experiments and may reorder them before the planner
+executes the top usable one. "Usable" excludes strategies already completed or
+failed with the same settings (signature match), guaranteeing every executed
+experiment is novel.
+
+2.3  Trust gate (when to stop)
+
+Without a trust gate, the loop settles as soon as (a) no candidate exceeds a
+marginal-improvement threshold or (b) unexplored strategies are exhausted under
+the round cap. This is cheap but can terminate with a brittle model, e.g. one
+that performs well on random splits but fails on scaffold splits.
+
+The trust gate formalizes stopping. A strategy is trustworthy if configured
+trust axes are satisfied. Four axes are assessed per completed experiment:
+
+  * predictive   -- good if the primary metric beats a dataset-class threshold
+                    (e.g. RMSE < 1.0 for regression/small, R2 >= 0.5), else
+                    moderate/weak.
+  * generalization -- good if the standard deviation across CV folds or the
+                    difference between random-split and stratified/scaffold
+                    split performance is small relative to the dataset class.
+  * robustness   -- good if the performance distribution under feature
+                    perturbation (permutation importance re-fit) remains
+                    stable.
+  * applicability domain -- evaluated via validation-set coverage of the
+                    training chemical space (e.g. scaffold-based leaves-one-
+                    out); wide if coverage >= 0.95, else narrow.
+
+The gate is advisory force: it never vetoes the next experiment; it only
+converts a finalize decision into an additional planning step when the current
+leader fails required axes, and it always defers to budget exhaustion ("compute
+budget exhausted", "experiment budget exhausted") or candidate exhaustion (no
+positive-utility candidate remains). Every gate decision is logged, so each
+run can be audited for how long it was forced to continue and why.
+
+2.4  Hyperparameter search
+
+When enabled, each executed strategy's hyperparameters are optimized by
+sequential model-based search: 60 runs of a Bayesian tree-structured parzen
+estimator within a per-family search space (e.g. n_estimators in
+{100,...,500}, learning_rate in {0.01,...,0.3}, max_depth in {2,...,9} for
+gradient-boosted trees). The reported metric is the CV score. Grid search with
+the same per-family space serves as the deterministic baseline.
+
+2.5  Knowledge-graph evidence layer
+
+The evidence layer is a read-only side car. Evidence is stored as JSONL
+triples (dataset, predicate, object) with confidence accrual by run id and a
+rolling window of the most recent 20 runs:
+
+  evidence.jsonl:
+    {"dataset": "esol", "predicate": "p:strategy_mean",
+     "object": "maccs|svr|scaffold", "value": 0.681, "n": 3,
+     "sign": -1, "run_ids": [...]}
+
+Facts are ingested at three granularities (dataset, dataset class = task x size
+bucket, and global). Static facts (model applicability rules, dataset-class
+prior means from public benchmarks) are injected with a registry fingerprint so
+that stale facts never poison a new registry version. The planner consumes
+facts through (a) the evidence bonus defined in 2.2, (b) a rendered evidence
+board grounded into the LLM prompt when an LLM is enabled, and (c) an
+explanation surface: for any strategy the system can render the facts for,
+facts against, and counterfactual alternatives. An empty store leaves the
+planner's ranking identical to the no-evidence condition -- the layer
+reallocates effort but never triggers experiments.
+
+2.6  Dataset benchmark and evaluation protocol
+
+Datasets (six; three regression, three binary classification):
+
+  * ESOL - 1128 compounds, aqueous solubility (regression, RMSE)
+  * FreeSolv - 642 molecules, hydration free energy (regression, RMSE)
+  * Lipophilicity - 4200 compounds, logD (regression, RMSE)
+  * BACE - 1513 compounds, BACE-1 inhibitor binding (binary, ROC-AUC)
+  * BBBP - 2039 compounds, blood-brain barrier permeability (binary, ROC-AUC)
+  * ClinTox - 1478 compounds, clinical toxicity (binary, ROC-AUC)
+
+Protocol: each dataset is split with random 5-fold cross-validation,
+single repeat, 20% held-out test fraction. Five independent seeds (0..4)
+reproduce all folds and all randomness. Identical folds ensure paired
+comparisons.
+
+Scenarios (each seed x dataset runs every scenario):
+
+  * grid        : deterministic baseline; for each enabled combination, CV
+                  error of the fixed hyperparameter grid is computed and the
+                  best combination is reported.
+  * agent-mock  : full agent, heuristic planner (no LLM), hyperparameter
+                  search on, trust gate on. (Primary scenario.)
+  * agent-nosearch : as agent-mock but hyperparameter search disabled
+                  (ablation of search).
+  * agent-nogate : as agent-mock but the trust gate is disabled
+                  (ablation of the gate; termination on first settle).
+  * agent-nvidia : as agent-mock but strategy selection is refined by the
+                  NVIDIA gpt-oss-20b model (ablation of the LLM; planner
+                  remains heuristic in all other scenarios).
+
+All scenarios share the model/representation library, the dataset folds, and
+the primary metric (RMSE for regression, ROC-AUC for classification);
+higher-is-better is reflected for classification before paired statistics.
+Wall-clock runtime and the number of executed experiments are recorded per
+run for the efficiency analysis.
+
+2.7  Statistical analysis
+
+Per-dataset, per-seed primary values are paired across scenarios. Differences
+are tested with the Wilcoxon signed-rank test (two-sided); p < 0.05 is
+reported as significant. Efficiency is reported as mean wall-clock time and
+median experiment count per scenario, with paired runtime ratios.
+
+--------------------------------------------------------------------------------
+3  RESULTS
+--------------------------------------------------------------------------------
+
+Note: campaign launched 2026-08-20 with fixed trust-gate channel wiring (see
+reproducibility record); cells marked (FILL:) are replaced after the runs
+complete and analysis.py runs.
+
+3.1  Predictive performance vs the deterministic grid baseline
+
+Table 1. Primary metric (RMSE / ROC-AUC), mean over 5 seeds (+/- std).
+Best per dataset in bold. n_experiments = executed strategies.
+
+  dataset        grid      agent-mock   agent-nvidia
+  ------------  --------   -----------  ------------
+  ESOL          (FILL:)    (FILL:)      (FILL:)
+  FreeSolv      (FILL:)    (FILL:)      (FILL:)
+  Lipophilicity (FILL:)    (FILL:)      (FILL:)
+  BACE          (FILL:)    (FILL:)      (FILL:)
+  BBBP          (FILL:)    (FILL:)      (FILL:)
+  ClinTox       (FILL:)    (FILL:)      (FILL:)
+
+(FILL: summary paragraph -- wins, ties, margins; whether significance is
+achieved under paired Wilcoxon across the 30 seed-dataset pairs.)
+
+(FILL: are the winning strategy families consistent with prior evidence, e.g.
+MACCS + SVR on small regression sets, MACCS + xgboost on scaffold-sensitive
+problems? Connect to the evidence layer where available.)
+
+3.2  Efficiency: experiments and wall-clock time
+
+Table 2. Mean runtime (seconds) and median experiments per scenario.
+
+  scenario      runtime (s)  median n_experiments
+  ------------  -----------  -------------------
+  grid         (FILL:)       (FILL:)
+  agent-mock   (FILL:)       (FILL:)
+  agent-nosearch (FILL:)     (FILL:)
+  agent-nogate (FILL:)       (FILL:)
+  agent-nvidia (FILL:)       (FILL:)
+
+(FILL: narrative -- gate-increase in experiments per run relative to nogate;
+the overhead buys generalization/robustness validation; per-METRIC-quality
+compute efficiency maybe.)
+
+3.3  Ablation I: hyperparameter search (agent-mock vs agent-nosearch)
+
+Table 3. Mean primary per dataset, search on vs off; delta.
+
+  dataset  search-on  search-off  delta
+  -------- ---------  ----------  -------
+  (FILL: per dataset...)
+
+Wilcoxon across dataset-seed pairs: p = (FILL:).
+
+3.4  Ablation II: trust gate (agent-mock vs agent-nogate)
+
+Table 4. Mean primary per dataset, gate on vs off; experiments and runtime.
+
+  dataset  gate-on  gate-off  delta  n_exp(on/off)
+  -------- -------  --------  -----  -------------
+  (FILL: per dataset...)
+
+Wilcoxon: p = (FILL:). Interpretation: the gate directs the final rounds of
+the budget toward validating/scaffolding alternative strategies and is
+expected to matter most where the settle point is premature (FILL: identify
+datasets where gate-on completed more experiments and whether accuracy
+improved or held).
+
+3.5  Ablation III: LLM strategy refinement (agent-mock vs agent-nvidia)
+
+Table 5. Mean primary per dataset, heuristic vs NVIDIA gpt-oss-20b
+refinement; runtime (LLM latency dominates).
+
+  dataset  heuristic  llm-refined  delta
+  -------- ---------  -----------  ------
+  (FILL: per dataset...)
+
+Wilcoxon: p = (FILL:). Caveat: $2 per-process latency i.e. the LLM path is
+analyzed as; the comparison asks whether an LLM reorders the reasonable
+candidate list beneficially when hired to do so (FILL: adapt to actual
+numbers).
+
+--------------------------------------------------------------------------------
+4  DISCUSSION
+--------------------------------------------------------------------------------
+
+(FILL: to be written from results; outline:)
+
+- Where the agent beat and lost to the grid baseline and why (strategy
+  elimination via trust/diagnosis, search vs manual grid, representation
+  selection).
+- The trust gate as a resolution of the stop/continue tension: outcomes on
+  datasets where gate-on produced a different final strategy and whether the
+  additional experiments paid for themselves.
+- The knowledge layer's minimal footprint: with an empty store the mock agent
+  is provably identical to the no-evidence agent; all planner changes are
+  conservative (caps 0.25/0.15). Cross-dataset transfer is demonstrated via
+  the evidence board rather than extra experiments.
+- Agentic vs AutoML: what judgement actually buys in QSAR (split choice,
+  failure diagnosis, stopping discipline) vs what is noise.
+- LLM role: refinement over generation -- the LLM picks among executable
+  strategies rather than inventing new chemistry, which keeps the system
+  auditable and cost-bounded.
+
+--------------------------------------------------------------------------------
+5  LIMITATIONS
+--------------------------------------------------------------------------------
+
+- Model library and representations are fixed and CPU-scoped; GPU-based deep
+  learning pipelines are out of scope.
+- The evidence store was empty at campaign start (--fresh-evidence), so the
+  paper quantifies the planner's internal dynamics rather than long-horizon
+  cross-dataset transfer; longer evidence accumulation is future work.
+- Mock-LM runs use wholly heuristic planning; claims about LLM planning rely
+  on the nvidia scenario only, and the LLM is a mid-size open-weight model
+  (gpt-oss-20b), not a frontier model.
+- Robustness axis relies on feature-perturbation proxies; adversarial and
+  label-noise stress tests are not included.
+- Single-repeat random 5-fold CV (with fixed seeds) bundles seed variation
+  into the 5-seed design; a per-seed repeated-CV variant would increase
+  confidence intervals.
+
+--------------------------------------------------------------------------------
+6  REPRODUCIBILITY
+--------------------------------------------------------------------------------
+
+- Repository: https://github.com/bhatnira/Agentic-QSAR (commit e8e7511 for the
+  campaign code; campaign launched with the trust-gate channel fix).
+- Environment: macOS, Python 3.14, RDKit 2025.09.x; dependency pins in
+  pyproject.toml.
+- Command (core scenarios):
+    python3 benchmarks/run_benchmark.py \
+      --datasets esol,freesolv,lipophilicity,bace,bbbp,clintox \
+      --seeds 0,1,2,3,4 --scenarios grid,agent-mock,agent-nosearch,agent-nogate \
+      --fresh-evidence
+  NVIDIA scenario adds --scenarios agent-nvidia (NVIDIA_API_KEY in env).
+- Analysis:
+    python3 benchmarks/analyze_results.py --seeds 0,1,2,3,4
+- Every agent run emits run_dir/plan_trace.jsonl (one line per planning
+  round: round, chosen strategy, rationale, evidence facts) and the final
+  report embeds the planning evidence digest. All logs are retained under
+  benchmarks/logs/ (paper_run_2.log, paper_run_nvidia2.log).
+- Known pipeline revisions: 2026-08-20 01:xx -- repaired trust-verdict channel
+  propagation (trust_verdicts was written but not declared as a state channel;
+  LangGraph drops undeclared keys) and a crash in finalize_report when the
+  final planning round yielded no candidate; both fixed in commit e8e7511 and
+  the paper campaign restarted with the fix. Results from before the fix were
+  discarded.

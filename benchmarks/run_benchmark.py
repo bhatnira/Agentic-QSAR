@@ -47,7 +47,53 @@ class BenchmarkDataset:
     target_column: str
     task_type: str
     note: str
+    target_columns: list[str] | None = None
+    url: str | None = None
 
+
+
+# -- extension datasets (multiclass / multitask / OpenADMET) ----------------
+
+TOX21_TARGETS = [
+    "NR-AR", "NR-AR-LBD", "NR-AhR", "NR-Aromatase", "NR-ER", "NR-ER-LBD",
+    "NR-PPAR-gamma", "SR-ARE", "SR-ATAD5", "SR-HSE", "SR-MMP", "SR-p53",
+]
+
+
+def _tox21_dataset() -> BenchmarkDataset:
+    return BenchmarkDataset(
+        "tox21",
+        "tox21.csv.gz",
+        "smiles",
+        "NR-AR",
+        "multitask_binary",
+        "Tox21 12-target nuclear receptor / stress response assays (8014 compounds)",
+        target_columns=TOX21_TARGETS,
+    )
+
+
+def _pampa3_dataset() -> BenchmarkDataset:
+    return BenchmarkDataset(
+        "pampa3",
+        "permeability_NCATS-PAMPA-pH7.4.csv",
+        "canonical_smiles",
+        "Phenotype",
+        "multiclass",
+        "NCATS PAMPA permeability at pH 7.4: 3 classes (Low/Moderate/High, 2033 compounds)",
+        url="https://netknowledge.github.io/ADMET/datasets/permeability_NCATS-PAMPA-pH7.4.csv",
+    )
+
+
+def _pxr_dataset() -> BenchmarkDataset:
+    return BenchmarkDataset(
+        "pxr",
+        "pxr-challenge_TRAIN.csv",
+        "SMILES",
+        "pEC50",
+        "regression",
+        "OpenADMET PXR induction pEC50, training split (4139 compounds)",
+        url="https://huggingface.co/datasets/openadmet/pxr-challenge-train-test/resolve/main/pxr-challenge_TRAIN.csv",
+    )
 
 DATASETS: dict[str, BenchmarkDataset] = {
     "esol": BenchmarkDataset(
@@ -75,6 +121,9 @@ DATASETS: dict[str, BenchmarkDataset] = {
         "clintox", "clintox.csv.gz", "smiles", "CT_TOX", "binary",
         "Clinical trial toxicity (1478 compounds)",
     ),
+    "tox21": _tox21_dataset(),
+    "pampa3": _pampa3_dataset(),
+    "pxr": _pxr_dataset(),
 }
 
 # Static "standard practice" baseline grid: (representation, model, hyperparams).
@@ -96,6 +145,12 @@ BASELINE_GRID: dict[str, list[tuple[str, str, dict[str, Any]]]] = {
         ("morgan", "extra_trees", {"n_estimators": 300, "max_depth": None}),
         ("morgan", "mlp", {"hidden_layer_sizes": (128, 64), "max_iter": 300, "early_stopping": True}),
     ],
+    "multiclass": [
+        ("morgan", "random_forest", {"n_estimators": 100, "max_depth": None}),
+        ("morgan", "random_forest", {"n_estimators": 300, "max_depth": 20}),
+        ("morgan", "extra_trees", {"n_estimators": 300, "max_depth": None}),
+        ("morgan", "mlp", {"hidden_layer_sizes": (128, 64), "max_iter": 300, "early_stopping": True}),
+    ],
 }
 
 
@@ -103,29 +158,54 @@ def ensure_dataset(dataset: BenchmarkDataset) -> Path:
     """Download (once) and return the cached local path for a dataset."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     dest = DATA_DIR / (dataset.file[:-3] if dataset.file.endswith(".gz") else dataset.file)
-    if not dest.exists():
-        url = f"{DATASET_DIR_URL}/{dataset.file}"
-        response = requests.get(url, timeout=300)
+    if dest.exists():
+        return dest
+    if dataset.url:
+        response = requests.get(dataset.url, timeout=600)
         response.raise_for_status()
-        if dataset.file.endswith(".gz"):
-            dest.write_bytes(gzip.decompress(response.content))
-        else:
-            dest.write_bytes(response.content)
+        dest.write_bytes(response.content)
+        return dest
+    url = f"{DATASET_DIR_URL}/{dataset.file}"
+    response = requests.get(url, timeout=300)
+    response.raise_for_status()
+    if dataset.file.endswith(".gz"):
+        dest.write_bytes(gzip.decompress(response.content))
+    else:
+        dest.write_bytes(response.content)
     return dest
 
 
 def load_dataset(dataset: BenchmarkDataset) -> pd.DataFrame:
     path = ensure_dataset(dataset)
+    if dataset.name == "tox21":
+        df = pd.read_csv(path, low_memory=False)
+        keep = [dataset.smiles_column] + [c for c in dataset.target_columns or [] if c in df.columns]
+        df = df[keep].dropna().reset_index(drop=True)
+        df.columns = ["smiles"] + [c for c in dataset.target_columns or [] if len(keep) > 1]
+        return df
+    if dataset.name == "pampa3":
+        df = pd.read_csv(path, low_memory=False)
+        df = df[[dataset.smiles_column, dataset.target_column]].dropna()
+        df.columns = ["smiles", dataset.target_column]
+        return df.reset_index(drop=True)
     df = pd.read_csv(path, low_memory=False)
     if dataset.smiles_column not in df.columns or dataset.target_column not in df.columns:
         raise ValueError(f"columns {dataset.smiles_column}/{dataset.target_column} missing from {path}")
     df = df[[dataset.smiles_column, dataset.target_column]].dropna()
-    df.columns = ["smiles", "target"]
+    df.columns = ["smiles", dataset.target_column]
     return df.reset_index(drop=True)
 
 
+def _base_task(task_type: str) -> str:
+    return task_type.removeprefix("multitask_")
+
+
 def _primary(task_type: str) -> str:
-    return "rmse" if task_type == "regression" else "roc_auc"
+    if task_type == "regression":
+        return "rmse"
+    if task_type in ("binary", "multitask_binary"):
+        return "roc_auc"
+    return "mcc"
 
 
 def _better(a: float, b: float, task_type: str) -> bool:
@@ -142,34 +222,48 @@ def run_baseline(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int) -> dict
     from cta_qsar.validation.base import make_cv_folds
 
     registry = get_registry()
+    base = _base_task(dataset.task_type)
+    grid = BASELINE_GRID[base]
+    target_cols = dataset.target_columns or [dataset.target_column]
+    needs_encode = base in ("binary", "multiclass")
+
+    def _encode(values: Any) -> np.ndarray:
+        if not needs_encode:
+            return pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+        classes = pd.unique(values)
+        class_map = {c: i for i, c in enumerate(sorted(classes))}
+        return np.asarray([class_map[v] for v in values])
+
     smiles = df["smiles"].astype(str).tolist()
     valid = np.asarray([Chem.MolFromSmiles(s) is not None for s in smiles])
     n_dropped = int((~valid).sum())
     if n_dropped:
         smiles = [s for s, ok in zip(smiles, valid, strict=False) if ok]
         df = df[valid].reset_index(drop=True)
-    y = pd.to_numeric(df["target"], errors="coerce").to_numpy()
-    if dataset.task_type != "regression":
-        classes = pd.unique(df["target"])
-        class_map = {c: i for i, c in enumerate(sorted(classes))}
-        y = np.asarray([class_map[v] for v in df["target"]])
+    ys = [_encode(df[col]) for col in target_cols]
     folds = make_cv_folds(
-        len(df), y, strategy="random", n_splits=5, n_repeats=1,
+        len(df), ys[0], strategy="random", n_splits=5, n_repeats=1,
         random_seed=seed, test_fraction=0.2,
     )
     rep_plugin = registry.get("representation", "morgan")
     X = representation_matrix(rep_plugin, smiles, fit=True)
     started = time.time()
     best: dict[str, Any] | None = None
-    for _rep, model, hp in BASELINE_GRID[dataset.task_type]:
+    for _rep, model, hp in grid:
         try:
-            estimator = wrapped_estimator(registry, model, dataset.task_type, n_classes=None, hyperparams=hp)
-            score = _fold_primary_score(estimator, X, y, folds, dataset.task_type)
+            estimator = wrapped_estimator(registry, model, base, n_classes=None, hyperparams=hp)
+            if dataset.task_type.startswith("multitask_"):
+                run_scores = [
+                    _fold_primary_score(estimator, X, y, folds, base) for y in ys
+                ]
+                score = float(np.mean(run_scores))
+            else:
+                score = _fold_primary_score(estimator, X, ys[0], folds, base)
         except Exception as exc:  # noqa: BLE001
             print(f"    baseline {model} failed: {exc}")
             continue
         row = {"model": model, "hyperparams": hp, "score": score}
-        if best is None or _better(score, best["score"], dataset.task_type):
+        if best is None or _better(score, best["score"], base):
             best = row
     if best is None:
         raise RuntimeError(f"no baseline combo succeeded for {dataset.name}")
@@ -183,7 +277,7 @@ def run_baseline(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int) -> dict
         "best_hyperparams": json.dumps(best["hyperparams"]),
         "primary": primary,
         "primary_value": round(value, 4),
-        "n_experiments": len(BASELINE_GRID[dataset.task_type]),
+        "n_experiments": len(grid),
         "runtime_seconds": round(time.time() - started, 1),
         "seed": seed,
     }
@@ -217,6 +311,8 @@ def run_agent(
     config.compute.max_minutes = 30.0
     config.dataset.smiles_column = dataset.smiles_column
     config.dataset.target_column = dataset.target_column
+    if dataset.target_columns:
+        config.dataset.target_columns = list(dataset.target_columns)
     config.reporting["output_dir"] = str(RUNS_ROOT)
     config.knowledge.evidence_path = str(KNOWLEDGE_EVIDENCE)
     if not trust_gate:

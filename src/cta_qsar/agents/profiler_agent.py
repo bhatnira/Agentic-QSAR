@@ -24,6 +24,7 @@ def profile_dataset(
     llm: ReasoningModel | None = None,
     detected_endpoint: dict[str, Any] | None = None,
     temporal_columns: list[str] | None = None,
+    target_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """Profile a dataframe into structured scientific context."""
     has_temporal = bool(temporal_columns)
@@ -45,11 +46,12 @@ def profile_dataset(
     if target_column and target_column in df.columns and detected_endpoint:
         profile["endpoint"] = detected_endpoint
         profile["task_type"] = detected_endpoint.get("task_type", "regression")
+        profile["target_columns"] = target_columns or [target_column]
         qa = quality_report(
             df,
             smiles_column=smiles_column,
             target_column=target_column,
-            task_type=profile["task_type"],
+            task_type=profile["task_type"].removeprefix("multitask_"),
             endpoint=detected_endpoint,
         )
         profile["quality_report"] = qa
@@ -79,12 +81,19 @@ class ProfilerAgent:
         self.llm = llm
         self.detector = EndpointDetector()
 
-    def run(self, df: pd.DataFrame, smiles_column: str, target_column: str | None) -> dict[str, Any]:
+    def run(
+        self,
+        df: pd.DataFrame,
+        smiles_column: str,
+        target_column: str | None,
+        target_columns: list[str] | None = None,
+    ) -> dict[str, Any]:
         return profile_dataset(
             df,
             smiles_column=smiles_column,
             target_column=target_column,
             llm=self.llm,
+            target_columns=target_columns or ([target_column] if target_column else None),
         )
 
 

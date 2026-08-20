@@ -65,6 +65,10 @@ def profile_dataset_node(state: dict[str, Any]) -> dict[str, Any]:
     state = dict(state)
     state["smiles_column"] = smiles_column
     state["target_column"] = target_column
+    state["target_columns"] = (
+        list(state.get("target_columns") or [])
+        or ([target_column] if target_column else [])
+    )
     state["profile"] = {
         "n_rows": int(len(df)),
         "n_columns": int(df.shape[1]),
@@ -175,7 +179,9 @@ def detect_endpoint(state: dict[str, Any]) -> dict[str, Any]:
     df = state["raw_df"]
     target_column = state.get("target_column") or ""
     detector = EndpointDetector()
-    detection = detector.detect(df, target_column)
+    detection = detector.detect(
+        df, target_column, target_columns=state.get("target_columns") or None
+    )
     state = dict(state)
     state["endpoint"] = detection.to_dict()
     agent_log(
@@ -198,7 +204,7 @@ def assess_data_quality(state: dict[str, Any]) -> dict[str, Any]:
         df,
         smiles_column=state["smiles_column"],
         target_column=target or None,
-        task_type=endpoint.get("task_type", "regression"),
+        task_type=endpoint.get("task_type", "regression").removeprefix("multitask_"),
         endpoint=endpoint,
     )
     state = dict(state)
@@ -414,6 +420,7 @@ def execute_experiment(state: dict[str, Any]) -> dict[str, Any]:
             budget=budget,
             llm_decision="heuristic",
             rationale=f"plan round {state.get('plan_round', 1)}",
+            target_columns=state.get("target_columns") or None,
         )
         state = dict(state)
         state["experiments"] = [*(state.get("experiments") or []), record]

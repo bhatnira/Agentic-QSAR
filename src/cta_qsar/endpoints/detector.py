@@ -57,6 +57,52 @@ def _looks_log_transformed(name_lower: str, values: pd.Series) -> bool:
     return neg or span > 2.5
 
 
+def _all_columns_present(df: pd.DataFrame, columns: list[str]) -> bool:
+    return all(col in df.columns for col in columns)
+
+
+def _detect_multitask_columns(
+    df: pd.DataFrame, columns: list[str]
+) -> EndpointDetection | None:
+    """Multiple aligned target columns -> multitask endpoint (uniform task)."""
+    tasks: list[str] = []
+    for col in columns:
+        vals = df[col].dropna()
+        numeric = pd.to_numeric(vals, errors="coerce")
+        n_parsed = int(numeric.notna().sum())
+        n_unique = int(numeric.nunique()) if len(numeric) else 0
+        if n_parsed == 0:
+            labels = sorted(pd.unique(vals).tolist())
+            n_unique = len(labels)
+        task = (
+            "unknown"
+            if n_unique == 0
+            else "binary"
+            if n_unique == 2
+            else "multiclass"
+            if n_unique <= 12
+            else "regression"
+        )
+        tasks.append(task)
+    uniq = {t for t in tasks if t != "unknown"}
+    if not uniq or len(uniq) > 1:
+        return None
+    base = next(iter(uniq))
+    if base == "multiclass":
+        return None
+    return EndpointDetection(
+        task_type=f"multitask_{base}",
+        endpoint_name="+".join(columns),
+        confidence=0.6,
+        reasoning=(
+            f"{len(columns)} aligned target columns detected as uniform "
+            f"{base} tasks; treated as multitask {base}."
+        ),
+        n_targets=len(columns),
+        target_columns=list(columns),
+    )
+
+
 def _has_multitask_shaped_targets(df: pd.DataFrame, target_column: str) -> bool:
     values = df[target_column].dropna()
     if len(values) == 0:
@@ -109,6 +155,12 @@ def detect_endpoint(
             column_found=False,
             ambiguous=True,
         )
+
+    columns = target_columns or [target_column]
+    if len(columns) > 1 and _all_columns_present(df, columns):
+        detection = _detect_multitask_columns(df, columns)
+        if detection is not None:
+            return detection
 
     column = df[target_column]
     name = str(target_column)

@@ -62,6 +62,9 @@ class QSARState(TypedDict, total=False):
     trust_verdicts: dict[str, str]
     diagnoses: list[FailureDiagnosis]
 
+    # -- multitask plumbing
+    target_columns: list[str]
+
     # -- budget
     started_at: float
     experiments_remaining: int
