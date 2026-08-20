@@ -204,11 +204,13 @@ were found committed; the .env file holds a real NVIDIA API key configuration
 but is excluded by .gitignore. The repository is now a git repository (see
 section 9, HARDENING VERIFICATION below).
 
-Verification (2026-08-19): ruff clean; 118/118 unit+integration tests pass
+Verification (2026-08-19): ruff clean; 121/121 unit+integration tests pass
 (was 106 at investigation time; +4 LLM provider registry tests, +5 regression
-tests for the fixes above, +3 structured-output coercion tests); the live
-NVIDIA model (openai/gpt-oss-20b) passed a 60/60 six-capability soak and two
-full end-to-end campaign runs, including the newly wired LLM stopping veto.
+tests for the fixes above, +3 structured-output coercion tests, +2 fingerprint
+tests, +1 stopping guard test); the live NVIDIA model (openai/gpt-oss-20b)
+passed a 60/60 six-capability soak and two full end-to-end campaign runs,
+including the newly wired LLM stopping veto. See section 10 for the ESOL
+benchmark validation that exposed and fixed two further defects.
 
 --------------------------------------------------------------------------------
 5. SCHEMA: OVERALL SYSTEM LAYOUT
@@ -399,20 +401,60 @@ behavior: response_format json_object enforcement on all five capability
 calls, None-string/dict-list/null-default/float-string coercions, and a
 lenient drop-bad-fields fallback in parse_model.
 
-Verification summary:
-  * Unit + integration tests: 118 passed (106 at investigation time)
+Verification summary (2026-08-19):
+  * Unit + integration tests: 121 passed (106 at investigation time;
+    +4 LLM provider registry, +5 regression tests for the section-4 fixes,
+    +3 structured-output coercion tests, +2 fingerprint tests, +1 stopping
+    guard test)
   * ruff: clean (src + tests)
   * Live NVIDIA (openai/gpt-oss-20b): 60/60 six-capability soak calls,
     plus two full end-to-end campaign runs (executive summary and stopping
     veto produced by the live model; provenance records provider/model)
   * All four issues in section 4 are fixed and covered by regression tests
   * MLflow: migrated from deprecated filesystem backend to SQLite
-  * Project: now under git version control (initial commit 2026-08-19)
+  * Project: now under git version control (2 commits on 2026-08-19)
+
+--------------------------------------------------------------------------------
+10. BENCHMARK VALIDATION (2026-08-19)
+--------------------------------------------------------------------------------
+A real benchmark campaign was run on the ESOL solubility dataset
+(MoleculeNet standard: 1128 compounds, regression endpoint "measured log
+solubility in mols per litre", downloaded to benchmarks/esol.csv; the
+benchmarks/ directory is git-ignored). The campaign exercised the full
+16-step workflow and found two additional real-world defects, both fixed:
+
+  1. Premature LLM stopping veto. The newly wired decide_stop consultation
+     let the live model stop the campaign after ONE experiment, claiming
+     "improvements have plateaued" with no basis. Fixed in
+     src/cta_qsar/orchestration/policies.py: the LLM veto now applies only
+     after >= 2 completed experiments, and the stop context sent by
+     decide_next_action carries the actual budget state plus the last three
+     experiments' metrics so the model can reason from evidence. Verified in
+     a live run: the veto then cited real numbers (RMSE 2.34 -> 1.74).
+     Test: test_decide_next_action_ignores_llm_stop_with_one_experiment.
+
+  2. Torsion fingerprint crash on modern RDKit (>= 2024.09 removed
+     GetHashedTopologicalTorsionFingerprintAsBitVect); a torsion experiment
+     failed at runtime (the self-correction loop recorded the failure and
+     continued, but the plugin was unusable). Fixed in
+     src/cta_qsar/chemistry/fingerprints.py: the identity IntVect API is
+     used and torsion IDs are hashed into a fixed-width bit array
+     deterministically. Tests: tests/unit/test_fingerprints.py.
+
+Full-budget benchmark result (4 experiments, deterministic brain):
+  morgan+ridge[random]            RMSE 2.34  R2 -0.26
+  maccs+svr[scaffold]             RMSE 1.74  R2  0.30
+  atom_pair+elastic_net[scaffold] RMSE 1.31  R2  0.58   <- best observed
+  torsion+extra_trees[scaffold]   RMSE 2.13  R2 -0.09
+Reports and provenance for all runs live under benchmarks/runs/
+(e.g. benchmarks/runs/20260819-202215-esol/report.md).
 
 Remaining instrumentation-level notes (non-blocking): sklearn deprecation
-warnings for MorganGenerator and single-class fold warnings during tiny-CV
-campaigns are expected noise; MLFLOW_TRACKING_URI may still be set in .env
-to override the default sqlite URI.
+warnings for MorganGenerator/TopologicalTorsionGenerator and single-class
+fold warnings during tiny-CV campaigns are expected noise; MLFLOW_TRACKING_URI
+may still be set in .env to override the default sqlite URI; the live LLM's
+executive summary may occasionally misstate units (e.g. "135 GB" for a
+0.135 GB memory reading) -- the underlying report.json figures are correct.
 
 ================================================================================
 END OF REPORT
