@@ -1,0 +1,81 @@
+llm:
+  provider: nvidia
+  model: "openai/gpt-oss-20b"
+  temperature: 0.1
+  max_tokens: 4096
+  timeout_seconds: 120
+
+compute:
+  max_minutes: 30
+  max_experiments: 12
+  max_memory_gb: 16
+  gpu_required: false
+
+dataset:
+  smiles_column: null
+  target_column: null
+  max_rows: 100000
+  standardize: true
+  drop_invalid: false
+
+representations:
+  enabled:
+    - morgan
+    - rdkit_fp
+    - maccs
+    - atom_pair
+    - torsion
+    - rdkit_descriptors
+    - mordred
+
+models:
+  enabled:
+    - ridge
+    - elastic_net
+    - random_forest
+    - extra_trees
+    - svr
+    - xgboost
+    - mlp
+
+validation:
+  enabled:
+    - random
+    - stratified
+    - scaffold
+
+trust:
+  required:
+    - predictive
+    - generalization
+    - robustness
+    - applicability_domain
+
+uncertainty:
+  enabled: true
+  method: cv_std
+
+explainability:
+  enabled: true
+  method: permutation
+
+budget:
+  default_max_experiments: 12
+  cheap_runtime_seconds: 60
+  expensive_runtime_seconds: 600
+
+experiment:
+  n_splits: 5
+  n_repeats: 2
+  test_fraction: 0.2
+  random_seed: 42
+  min_cv_score_improvement: 0.01
+
+reporting:
+  format: markdown
+  output_dir: runs
+  include_plots: false
+
+tracking:
+  enabled: true
+  backend: mlflow

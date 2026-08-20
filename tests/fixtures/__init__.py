@@ -1,0 +1,1 @@
+"""Test dataset fixtures (synthetic, deterministic, CPU-only)."""

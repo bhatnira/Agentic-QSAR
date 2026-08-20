@@ -1,0 +1,34 @@
+# CPU-only profile: conservative budgets, no GPU-dependent plugins.
+llm:
+  provider: mock
+  model: "heuristic"
+
+compute:
+  max_minutes: 30
+  max_experiments: 6
+  max_memory_gb: 8
+  gpu_required: false
+
+representations:
+  enabled:
+    - morgan
+    - rdkit_descriptors
+
+models:
+  enabled:
+    - ridge
+    - random_forest
+    - xgboost
+
+validation:
+  enabled:
+    - random
+    - scaffold
+
+trust:
+  required:
+    - predictive
+    - generalization
+
+tracking:
+  enabled: false

@@ -1,0 +1,37 @@
+# Development profile: fast iteration, few experiments, mock LLM.
+llm:
+  provider: mock
+  model: "heuristic"
+
+compute:
+  max_minutes: 5
+  max_experiments: 3
+  max_memory_gb: 8
+  gpu_required: false
+
+representations:
+  enabled:
+    - morgan
+
+models:
+  enabled:
+    - ridge
+    - random_forest
+
+validation:
+  enabled:
+    - random
+    - scaffold
+
+trust:
+  required:
+    - predictive
+
+experiment:
+  n_splits: 3
+  n_repeats: 1
+  test_fraction: 0.2
+  random_seed: 42
+
+tracking:
+  enabled: false

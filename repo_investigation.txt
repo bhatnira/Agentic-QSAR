@@ -1,0 +1,419 @@
+================================================================================
+CTA-QSAR REPOSITORY INVESTIGATION REPORT
+================================================================================
+Date of investigation : 2026-08-19
+Target                : /Users/nb/Documents/Agentic-qsar
+Language / stack      : Python >= 3.11, LangGraph, RDKit, scikit-learn,
+                        XGBoost, pydantic, pandas/numpy, MLflow, pytest, ruff
+Size                  : ~18,700 lines (source + tests), 2.2 MB on disk
+Test status           : 106/106 tests passing (CPU-only, mock LLM, no API)
+Lint status           : ruff clean on src/ and tests/
+
+--------------------------------------------------------------------------------
+1. WHAT THE REPOSITORY IS
+--------------------------------------------------------------------------------
+This repository contains CTA-QSAR, short for "Chemically Trustworthy Agentic
+QSAR", an autonomous scientific software agent whose job is to receive a
+previously unseen QSAR (Quantitative Structure-Activity Relationship) dataset
+and decide, entirely on its own, how that dataset should be modeled. The
+project was produced from a large autonomous-build specification stored in
+prompt.txt in the repository root. It is explicitly NOT AutoML: instead of
+simply tuning a fixed pipeline, the agent autonomously discovers and evaluates
+the combination of molecular representation space, modeling paradigm,
+validation strategy, and trustworthiness strategy, and then self-corrects its
+course from observed experimental evidence before writing a reproducible
+scientific report.
+
+The core scientific loop works as follows. The agent first loads a dataset
+(CSV, TSV, or Parquet) and profiles it: it auto-detects the SMILES column and
+the target column when the user has not supplied them, reports row and column
+counts, dtypes, missing values, duplicates, and candidate column names. It then
+detects the endpoint type (regression, binary classification, multiclass
+classification, or multitask regression) using measurable evidence such as the
+number of unique target values, and reports its confidence rather than silently
+assuming. Next, the chemistry is standardized with RDKit: canonical SMILES,
+desalting, and neutralization are applied, the original SMILES are never
+destroyed, and a full transformation log is kept. A data quality report flags
+invalid SMILES, duplicate rows, duplicate molecules, conflicting labels on
+identical molecules, class imbalance, extreme target values (flagged but never
+automatically removed) and the chemical space is characterized by unique
+molecule counts and nearest-neighbor Tanimoto similarity statistics.
+
+Following characterization, the agent selects which validation strategies are
+applicable (random, stratified, scaffold, cluster, temporal splits), generates
+feasible experiment candidates as (representation, model, validation) triples,
+and scores every candidate with a utility formula of
+( expected improvement + information gain + trust gain ) / compute cost ,
+so that cheap and scientifically informative experiments are preferred. The
+top candidates are ranked deterministically, and optionally re-ranked by the
+configured LLM. The chosen experiment is executed by the ExperimentRunner:
+molecules are featurized into the chosen representation space, folds are built
+with the chosen split strategy, an estimator is trained and evaluated per fold,
+and metrics are aggregated with means and standard deviations. Six trust
+facets are then evaluated: predictive performance, scaffold-based
+generalization, seed robustness, applicability domain coverage, uncertainty,
+and explainability. Deterministic diagnosis rules inspect the trust report and
+emit hypotheses such as chemical-series dependence (strong random split but
+weak scaffold split), overfitting (large train/validation gap), class
+imbalance (high accuracy but poor PR-AUC), limited applicability domain (good
+performance on chemically distant test molecules), or unstable
+representation/model combinations. Interventions are proposed and ranked, and
+the graph then routes back to planning to run the next most valuable
+experiment, until a stopping rule fires (experiment budget exhausted, compute
+time budget exhausted, no feasible candidates remain, or no meaningful
+improvement). Finally, a Markdown and JSON scientific report is written to
+runs/<run-id>/ together with experiments.jsonl, provenance.json, and a
+sanitized environment.txt, and optionally logged to MLflow.
+
+A defining design rule of the system is that the LLM never calculates. All
+descriptor computation, fingerprint generation, model training, metric
+computation, and statistics are performed by deterministic, tested Python
+tools; the LLM (by default NVIDIA, but also OpenRouter, Hugging Face, or a
+deterministic mock/heuristic model) receives structured evidence and returns
+structured JSON decisions for case classification, strategy selection,
+diagnosis, intervention proposal, stop decisions, and the final executive
+summary. Unknown providers and missing API keys degrade gracefully to the
+mock heuristic model so a run never blocks. The whole system is CPU-first:
+GPU-based GNNs and foundation-model embeddings exist as optional plugins but
+are not required.
+
+--------------------------------------------------------------------------------
+2. ARCHITECTURE AND PROJECT LAYOUT
+--------------------------------------------------------------------------------
+The source tree is organized under src/cta_qsar/ in roughly fourteen modules.
+core/ defines the LangGraph state TypedDict (state.py), YAML-plus-environment
+configuration with CLI overrides (config.py), the plugin Protocol contracts
+shared by every extensible capability (interfaces.py), the namespaced plugin
+registry with explicit auto-discovery (registry.py), shared exceptions,
+logging with agent-level structured log lines, and a contextvars-based
+ExecutionContext that threads the config, plugin registry, and LLM instance
+through the graph.
+
+orchestration/ contains the LangGraph assembly (graph.py), the sixteen plain
+function nodes implementing each workflow step (nodes.py), conditional routing
+logic (routing.py), and stopping/continuation policies (policies.py). The
+graph is cyclic: after diagnose_failure and propose_intervention, routing
+returns to plan_experiment for self-correction. agents/ provides the scientist
+facade used by the CLI and tests (scientist.py), the planner agent that
+generates and scores candidates and consults the LLM (planner_agent.py), the
+diagnosis agent that merges deterministic rules with LLM refinement
+(diagnosis_agent.py), a profiler agent, and a critic agent that sanity-checks
+candidates (currently not wired into the graph).
+
+The chemistry layer (chemistry/) implements RDKit standardization, SMILES
+validation and the data-quality report, and chemical-space summary statistics.
+endpoints/ contains the endpoint detection facade and the regression, binary,
+multiclass, and multitask endpoint plugins. representations/ contains eight
+fingerprint, descriptor, and graph representations as plugins (Morgan, RDKit
+fingerprints, MACCS, AtomPair, Torsion, RDKit descriptors, Mordred descriptors,
+graph featurizer, foundation embeddings) plus registry helpers for
+applicability filtering, cost estimation, and safe feature-matrix computation.
+models/ contains classical estimators (Ridge, ElasticNet, RandomForest,
+ExtraTrees, SVR, XGBoost, LightGBM, MLP), deep graph models (GCN, GAT, MPNN)
+that consume graph representations directly, a foundation-model head, and an
+AutoGluon AutoML wrapper, each behind the ModelPlugin Protocol with
+applicability, cost estimation, estimator building, and hyperparameter-space
+hooks. validation/ implements random, stratified, scaffold, cluster, and
+temporal split plugins producing CV fold plans.
+
+trust/ implements the six trust plugins and shared metric helpers. experiments/
+contains the utility-scoring candidate planner, the experiment runner, the
+BudgetState enforcements (max experiments, max minutes, max memory), and an
+on-disk experiment tracker. diagnosis/ holds the deterministic failure rules
+and the intervention proposer. memory/ persists experiments.jsonl, provenance,
+and environment snapshots. reporting/ builds the scientific report dict and
+exports it as JSON and Markdown. hardware/ probes CPU, RAM, and GPU/CUDA
+availability. llm/ implements the abstract ReasoningModel with structured-JSON
+output contracts, the NVIDIA, OpenRouter, Hugging Face providers, and the
+deterministic HeuristicModel mock. cli/ provides the cta-qsar command line
+interface with profile, run, report, list-models, list-representations and
+list-validation subcommands. configs/ ships default, cpu, and development YAML
+profiles; tests/ contains unit and integration test suites with synthetic,
+deterministically generated RDKit datasets; examples/ contains generated
+regression and classification CSVs; runs/ contains two complete example runs
+from a previous session (regression and classification) with all artifacts.
+
+--------------------------------------------------------------------------------
+3. VERIFICATION PERFORMED
+--------------------------------------------------------------------------------
+The full pytest suite was executed with python3. All 106 tests passed,
+including the integration tests that run the complete LangGraph workflow from
+CSV to final report on CPU with the mock LLM, and the unit tests covering
+budget logic, endpoint detection, standardization, validation splits, planner
+utility ranking, experiment memory, policies, LLM factory fallback, deep
+models, tracker, data quality, and registry discovery. The ruff lint run over
+src/ and tests/ reported zero issues. Example run artifacts under runs/ were
+inspected and confirmed complete (report.md, report.json, experiments.jsonl,
+provenance.json, environment.txt) with realistic metrics, e.g. for the
+regression example: morgan+ridge on random split RMSE 0.7495, scaffold split
+RMSE 0.7491, cluster split RMSE 0.9508. Security posture was verified: API
+keys are read from .env which is git-ignored, and run provenance strips
+NVIDIA*, OPENROUTER*, HF_*, and TOKEN* environment entries before persisting
+environment.txt.
+
+--------------------------------------------------------------------------------
+4. ISSUES FOUND (ALL RESOLVED ON 2026-08-19)
+--------------------------------------------------------------------------------
+Four issues were identified. The most substantive was a logic bug in the
+planner's heuristic expectations (src/cta_qsar/experiments/planner.py,
+lines 203-204): the lines
+    rep_novel = not any(h.get("representation") == rep_name for h in []) and done > 0
+    model_novel = not any(h.get("model") == model_name for h in []) and done > 0
+iterate over an EMPTY list, so the "untried representation/model" novelty check
+was effectively dead code. The condition therefore evaluated to True for every
+representation and model once at least one experiment had been completed, which
+inflated the expected information gain of ALL candidates on every planning
+round after the first. FIXED: the novelty check now inspects the real history
+signatures ("rep|model|split|seed"); only genuinely untried components earn the
+bonus. Regression test: test_novelty_bonus_only_for_untried_components.
+
+The second issue was documentation drift versus the live orchestration.
+nodes.py defined a decide_next_action node and policies.py defined a
+decide_next function implementing sophisticated stopping rules (round cap,
+no-improvement rounds, negligible-improvement detection), but neither was wired
+into the LangGraph: the actual routing after propose_intervention only checked
+the stop_reasons list and the experiment count, and the sophisticated policy
+functions were invoked only inside finalize_report for reporting purposes.
+Similarly, the CriticAgent in agents/critic_agent.py implemented duplicate and
+infeasibility checks but was not invoked by any node; the planner's
+pick_first_usable performs deduplication instead. FIXED: decide_next_action is
+now the graph's conditional edge out of propose_intervention, it consults the
+LLM decide_stop capability each round (guarded, degrades to the heuristic
+policy on failure), and the unused CriticAgent was removed. Regression tests:
+test_decide_next_action_* in tests/integration/test_failure_and_routing.py.
+
+The third issue was a latent pipeline crash for string class labels. In
+src/cta_qsar/experiments/runner.py (line 78) the target column was converted
+with pd.to_numeric(..., errors="coerce"); if a classification target contains
+string labels such as "active"/"inactive", every value becomes NaN and the
+entire modeling dataset is silently dropped, yielding empty folds and useless
+experiments. FIXED: classification targets are never float-coerced; only
+blank/NaN rows are dropped (with provenance) and string labels are
+label-encoded downstream. Regression test:
+test_classification_with_string_labels_keeps_rows.
+
+Minor findings: nodes.py contained an empty conditional statement
+(if "scaffold" in chosen and "random" in chosen: pass, lines 250-251); the
+route_next routing counted failed experiments against the budget while
+pick_first_usable counts only completed ones, so the two budget accounting
+views can disagree; and several agent and helper functions (profiler_agent,
+critic_agent) were partially redundant with node implementations. The empty
+conditional and CriticAgent were removed; MLflow tracking was migrated from
+the deprecated filesystem store to a SQLite backend (mlflow.db). No secrets
+were found committed; the .env file holds a real NVIDIA API key configuration
+but is excluded by .gitignore. The repository is now a git repository (see
+section 9, HARDENING VERIFICATION below).
+
+Verification (2026-08-19): ruff clean; 118/118 unit+integration tests pass
+(was 106 at investigation time; +4 LLM provider registry tests, +5 regression
+tests for the fixes above, +3 structured-output coercion tests); the live
+NVIDIA model (openai/gpt-oss-20b) passed a 60/60 six-capability soak and two
+full end-to-end campaign runs, including the newly wired LLM stopping veto.
+
+--------------------------------------------------------------------------------
+5. SCHEMA: OVERALL SYSTEM LAYOUT
+--------------------------------------------------------------------------------
+
+                      USER DATASET (CSV / TSV / Parquet)
+                                   |
+                                   v
+                        +--------------------+
+                        |  cta-qsar CLI      |  profile | run | report | list-*
+                        +--------------------+
+                                   |
+                                   v
+                       +---------------------+
+                       | QSARScientist facade|  (agents/scientist.py)
+                       +---------------------+
+                 |                       |                  |
+                 v                       v                  v
+        +---------------+      +-----------------+   +----------------+
+        | Config        |      | LLM factory     |   | PluginRegistry |
+        | YAML+env+CLI  |      | nvidia/openrouter|  | 12 plugin kinds|
+        +---------------+      | hf/mock         |   +----------------+
+                               +-----------------+           |
+                                                             v
+        +------------------------------------------------------------+
+        |              LANGGRAPH CYCLIC WORKFLOW                     |
+        |  StateGraph(QSARState) - contextvars ExecutionContext      |
+        |  build_graph() in orchestration/graph.py                   |
+        +------------------------------------------------------------+
+
+--------------------------------------------------------------------------------
+6. SCHEMA: THE 16-STEP WORKFLOW (LANGGRAPH NODES AND ROUTING)
+--------------------------------------------------------------------------------
+
+ ingest_dataset --> profile_dataset --> detect_endpoint --> standardize_dataset
+      |                 |                  |                   |
+      |                 |                  |                   v
+      |                 |                  |         assess_data_quality
+      |                 |                  |                   |
+      |                 |                  |                   v
+      |                 |                  |     characterize_chemical_space
+      |                 |                  |                   |
+      |                 |                  |                   v
+      |                 |                  |         select_validation
+      |                 |                  |                   |
+      |                 |                  |                   v
+      |                 |                  |   generate_candidate_representations
+      |                 |                  |                   |
+      |                 |                  |                   v
+      |                 |                  |     generate_candidate_models
+      |                 |                  |                   |
+      |                 |                  |                   v
+      |                 |                  |        plan_experiment  <-------------+
+      |                 |                  |                   |                  |
+      |                 |                  |    selected?      |   (loop back)    |
+      |                 |                  |      / \          |                  |
+      |                 |                  |  plan/  finalize  |                  |
+      |                 |                  |      |     |      |                  |
+      |                 |                  |      v     v      |                  |
+      |                 |                  | execute finalize--+--- report        |
+      |                 |                  |   |        ^                        |
+      |                 |                  |   | fail    |                        |
+      |                 |                  |   +---------+ (skip to planning)     |
+      |                 |                  |   |                                  |
+      |                 |                  |   v                                  |
+      |                 |                  | evaluate_performance                 |
+      |                 |                  |   |                                  |
+      |                 |                  |   v                                  |
+      |                 |                  | evaluate_trust                       |
+      |                 |                  |   |                                  |
+      |                 |                  |   v                                  |
+      |                 |                  | diagnose_failure --------------------+
+      |                 |                  |   |                                  |
+      |                 |                  |   v                                  |
+      |                 |                  | propose_intervention -> plan/finalize
+      |                 |                  |                                  |
+      |                 |                  +----------------------------------+
+
+ Simplified loop:
+ plan_experiment --> execute_experiment --> evaluate_performance
+      ^                                                   |
+      |                                                   v
+      |                                             evaluate_trust
+      |                                                   |
+      |                                                   v
+      |                                             diagnose_failure
+      |                                                   |
+      |                                                   v
+      +----------------- propose_intervention <--  (intervention ranked)
+                    |                                        ^
+                    v                                        |
+              plan_experiment (self-correction)  ------------+
+              (stop when: budget exhausted | no feasible candidates
+               | no improvement | plan round cap)
+
+--------------------------------------------------------------------------------
+7. SCHEMA: MODULE DEPENDENCIES
+--------------------------------------------------------------------------------
+
+              +-------------------------------------------------+
+              |                    CLI (cli/main.py)            |
+              +-------------------------------------------------+
+                                 |
+                                 v
+              +---------------------------------------------+
+              |              QSARScientist (agents/)         |
+              +---------------------------------------------+
+                 |                  |                  |
+                 v                  v                  v
+        +-----------------+ +--------------------+ +-------------------------+
+        |  Orchestration  | |  LLM (llm/)        | |  PluginRegistry         |
+        |  LangGraph      | |  ReasoningModel     | |  (core/registry.py)     |
+        |  16 nodes,      | |  nvidia | openrouter| |  +-------------------+  |
+        |  routing,       | |  hf | mock (JSON)   | |  | endpoint plugins  |  |
+        |  policies       | |  never computes     | |  | representation    |  |
+        +-----------------+ +--------------------+ |  | model plugins     |  |
+              |                                    |  | validation plugins|  |
+              v                                    |  | trust plugins     |  |
+        +-----------------+                        |  | diagnosis/interv. |  |
+        | ExperimentRunner|                         |  +-------------------+  |
+        | (experiments/)  | ----------------------------------------------    |
+        +-----------------+            |          |          |          |     |
+             |    |    |                v          v          v          v
+             v    v    v        +----------+ +---------+ +----------+ +-------+
+        chemistry           representations models    validation   trust
+        (RDKit)             (9 plugins)  (13 plugins)(5 splits)  (6 facets)
+             |                  |           |            |           |
+             +------------------+-----------+------------+-----------+
+                                          |
+                                          v
+                          +-----------------------------+
+                          | Diagnosis / Interventions   |
+                          | (diagnosis/, agents/)       |
+                          +-----------------------------+
+                                          |
+                                          v
+                          +-----------------------------+
+                          | Memory + Reporting          |
+                          | experiments.jsonl,         |
+                          | provenance.json, report.md,|
+                          | report.json, MLflow        |
+                          +-----------------------------+
+
+--------------------------------------------------------------------------------
+8. SCHEMA: PLANNER UTILITY SCORING AND SELF-CORRECTION DECISION FLOW
+--------------------------------------------------------------------------------
+
+ Candidate triple (representation, model, validation)
+        |
+        v
+ cost  = rep_cost.runtime + model_cost.runtime + (mem_gb * 10)
+        |
+        v
+ utility = ( expected_improvement
+             + expected_information_gain
+             + expected_trustworthiness_gain ) / compute_cost
+        |
+        v
+ rank candidates desc; LLM may re-rank top-8 (if configured)
+        |
+        v
+ pick_first_usable: skip signatures already in memory (never repeat,
+ including failures); skip candidates exceeding 80% of time budget
+        |
+        v
+ execute -> evaluate trust -> diagnose -> rank interventions by
+ (expected_improvement + expected_trust_gain) / compute_cost
+        |
+        v
+ continue (plan_experiment) until stopping rule fires:
+   * experiment budget exhausted (max_experiments)
+   * compute time budget exhausted (max_minutes)
+   * no feasible candidate remains
+   * no unexplored applicable strategies remain
+   * plan round cap / no meaningful improvement (documented policies)
+        |
+        v
+ finalize_report -> export JSON + Markdown + MLflow + provenance
+
+--------------------------------------------------------------------------------
+9. HARDENING VERIFICATION (2026-08-19)
+--------------------------------------------------------------------------------
+After the investigation, the LLM layer was made pluggable (provider registry
+with self-registering ProviderSpec entries: nvidia, openrouter, huggingface,
+mock; cta-qsar list-providers; documented how-to in docs/llm_providers.md) and
+the structured-output parsing was hardened against real NVIDIA model
+behavior: response_format json_object enforcement on all five capability
+calls, None-string/dict-list/null-default/float-string coercions, and a
+lenient drop-bad-fields fallback in parse_model.
+
+Verification summary:
+  * Unit + integration tests: 118 passed (106 at investigation time)
+  * ruff: clean (src + tests)
+  * Live NVIDIA (openai/gpt-oss-20b): 60/60 six-capability soak calls,
+    plus two full end-to-end campaign runs (executive summary and stopping
+    veto produced by the live model; provenance records provider/model)
+  * All four issues in section 4 are fixed and covered by regression tests
+  * MLflow: migrated from deprecated filesystem backend to SQLite
+  * Project: now under git version control (initial commit 2026-08-19)
+
+Remaining instrumentation-level notes (non-blocking): sklearn deprecation
+warnings for MorganGenerator and single-class fold warnings during tiny-CV
+campaigns are expected noise; MLFLOW_TRACKING_URI may still be set in .env
+to override the default sqlite URI.
+
+================================================================================
+END OF REPORT
+================================================================================

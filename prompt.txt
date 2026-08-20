@@ -1,0 +1,1465 @@
+You are a senior software architect, AI agent engineer, cheminformatics scientist,
+QSAR researcher, machine-learning engineer, and production Python developer.
+
+Your task is to BUILD a complete, working, modular, research-grade autonomous QSAR
+scientist in the current VS Code workspace.
+
+Do not merely explain the architecture.
+Do not give me pseudocode.
+Do not stop at skeleton files.
+
+You must create the files, implement the code, install/check dependencies,
+run tests, run an end-to-end example, diagnose errors, and fix them.
+
+============================================================
+PROJECT
+============================================================
+
+Project name:
+
+Chemically Trustworthy Agentic QSAR
+
+Short name:
+
+CTA-QSAR
+
+Core concept:
+
+Build an autonomous scientific agent that receives a previously unseen QSAR
+dataset and determines how the dataset should be modeled.
+
+The agent must autonomously:
+
+1. inspect the dataset;
+2. identify the molecular structure column;
+3. identify the endpoint/target column;
+4. infer the endpoint/task type;
+5. characterize the dataset;
+6. perform chemical/data quality control;
+7. identify the appropriate validation strategy;
+8. identify candidate molecular representation spaces;
+9. identify candidate modeling paradigms;
+10. select computationally efficient experiments;
+11. train/evaluate models;
+12. assess predictive performance;
+13. assess chemical trustworthiness;
+14. diagnose weaknesses;
+15. propose corrective interventions;
+16. run additional experiments;
+17. compare previous and new evidence;
+18. stop when further experimentation is not worthwhile;
+19. produce a reproducible final scientific report.
+
+This is NOT simply AutoML.
+
+The central research idea is:
+
+AUTONOMOUS MODELING-STRATEGY DISCOVERY AND SELF-CORRECTION FOR
+CHEMICALLY TRUSTWORTHY QSAR.
+
+============================================================
+IMPORTANT SCOPE
+============================================================
+
+This is a QSAR/molecular property prediction system.
+
+DO NOT include as core functionality:
+
+- molecular docking
+- AlphaFold
+- protein structure prediction
+- molecular dynamics
+- protein-ligand docking
+- virtual screening
+- molecular dynamics simulations
+
+Do not turn this into a general drug-discovery agent.
+
+Focus on:
+
+molecular structure
++
+chemical representations
++
+QSAR endpoints
++
+machine learning
++
+deep molecular learning
++
+molecular foundation-model representations
++
+validation
++
+uncertainty
++
+applicability domain
++
+explainability
++
+self-correction
++
+computational efficiency.
+
+============================================================
+DESIGN PRINCIPLE
+============================================================
+
+The system must be MODULAR.
+
+A new QSAR case must be addable without rewriting the core agent.
+
+A new:
+
+- endpoint type
+- preprocessing method
+- representation
+- model
+- validation strategy
+- uncertainty method
+- explainability method
+- failure diagnosis
+- intervention
+- LLM provider
+
+must be implementable as a plugin/module.
+
+The orchestration engine must remain unchanged.
+
+============================================================
+HIGH-LEVEL ARCHITECTURE
+============================================================
+
+Implement:
+
+                    USER DATASET
+                         |
+                         v
+                DATASET PROFILER
+                         |
+                         v
+                 QSAR CASE AGENT
+                         |
+                         v
+               STRATEGY PLANNER
+                         |
+              +----------+----------+
+              |                     |
+              v                     v
+       REPRESENTATION          MODEL STRATEGY
+          REGISTRY                 REGISTRY
+              |                     |
+              +----------+----------+
+                         |
+                         v
+                 EXPERIMENT PLANNER
+                         |
+                         v
+                  EXPERIMENT RUNNER
+                         |
+                         v
+                  TRUST EVALUATOR
+                         |
+                         v
+                 FAILURE DIAGNOSIS
+                         |
+                         v
+                 SELF-CORRECTION
+                         |
+                         +----------+
+                                    |
+                                    v
+                              NEXT EXPERIMENT
+                                    |
+                                    +----> loop
+                                    |
+                                    v
+                              FINAL REPORT
+
+============================================================
+ORCHESTRATION
+============================================================
+
+Use LangGraph.
+
+Do NOT implement this as a simple linear chain.
+
+The workflow must be stateful and cyclic.
+
+Use conditional routing.
+
+The graph should contain nodes conceptually similar to:
+
+1. ingest_dataset
+2. profile_dataset
+3. detect_endpoint
+4. assess_data_quality
+5. characterize_chemical_space
+6. select_validation
+7. generate_candidate_representations
+8. generate_candidate_models
+9. plan_experiment
+10. execute_experiment
+11. evaluate_performance
+12. evaluate_trust
+13. diagnose_failure
+14. propose_intervention
+15. decide_next_action
+16. finalize_report
+
+The graph must be able to return to:
+
+plan_experiment
+
+after a failure.
+
+============================================================
+LLM ARCHITECTURE
+============================================================
+
+The system must NOT depend on OpenAI/GPT.
+
+Create an abstract LLM interface.
+
+Example:
+
+ReasoningModel
+
+Methods:
+
+- plan()
+- classify_case()
+- select_strategy()
+- diagnose()
+- propose_intervention()
+- summarize()
+
+Implement at least:
+
+1. OpenRouter provider
+2. Hugging Face provider
+
+The provider must be configurable.
+
+Example:
+
+LLM_PROVIDER=openrouter
+LLM_MODEL=<model-name>
+
+or:
+
+LLM_PROVIDER=huggingface
+LLM_MODEL=<model-name>
+
+Do not hard-code API keys.
+
+Use environment variables.
+
+Example:
+
+OPENROUTER_API_KEY=
+HF_TOKEN=
+
+Create:
+
+.env.example
+
+Never commit credentials.
+
+============================================================
+LLM MODEL REQUIREMENTS
+============================================================
+
+The system should support open-weight models such as:
+
+- Qwen
+- DeepSeek
+- gpt-oss
+- Gemma
+- Nemotron
+
+Do not hard-code one model.
+
+The user must be able to change the model through YAML configuration
+or environment variables.
+
+Prefer models that support:
+
+- tool calling
+- structured output
+- JSON output
+- sufficient context length
+
+The LLM should ONLY reason over structured scientific information.
+
+The LLM must NOT perform:
+
+- RDKit calculations
+- descriptor calculations
+- fingerprints
+- model training
+- metric calculations
+- statistical calculations
+
+Those must be deterministic Python tools.
+
+============================================================
+CPU-FIRST REQUIREMENT
+============================================================
+
+Assume the user may have NO GPU.
+
+The system must work on CPU.
+
+GPU-dependent methods must be optional.
+
+The first implementation must work with:
+
+- RDKit
+- scikit-learn
+- XGBoost
+- LightGBM if available
+- AutoGluon if available
+- CPU-compatible PyTorch components
+
+Do not require CUDA.
+
+The system should detect hardware automatically.
+
+Create:
+
+HardwareProfile
+
+containing:
+
+- CPU cores
+- RAM
+- GPU availability
+- GPU memory
+- CUDA availability
+
+The agent must consider computational resources when planning experiments.
+
+============================================================
+COMPUTE-AWARE EXPERIMENT PLANNING
+============================================================
+
+Do not brute-force every possible model.
+
+The agent should sequentially select experiments.
+
+Each candidate experiment should have:
+
+ExperimentCandidate:
+
+- representation
+- model
+- validation strategy
+- hyperparameter budget
+- estimated runtime
+- estimated memory
+- expected improvement
+- expected information gain
+- expected trustworthiness gain
+- compute cost
+- reason
+
+Use a utility concept similar to:
+
+utility =
+    expected_scientific_value / estimated_compute_cost
+
+Initially this can be heuristic.
+
+Design the interface so Bayesian optimization or learned experiment
+selection can be added later.
+
+============================================================
+DATASET INPUT
+============================================================
+
+Support:
+
+CSV
+TSV
+Parquet
+
+The user should be able to specify:
+
+--data
+--smiles-column
+--target-column
+
+But the system should also attempt automatic detection.
+
+Example:
+
+qsar-agent run \
+    --data data.csv \
+    --smiles-column SMILES \
+    --target-column pIC50 \
+    --budget 30
+
+============================================================
+DATASET PROFILING
+============================================================
+
+Create a DatasetProfiler.
+
+Determine:
+
+- number of rows
+- number of columns
+- molecular structure column
+- target columns
+- categorical columns
+- numerical columns
+- missing values
+- duplicate rows
+- duplicate molecules
+- conflicting labels
+- class balance
+- target distribution
+- number of unique molecules
+- chemical diversity
+- approximate molecular-weight distribution
+- logP distribution where available
+- charge distribution where available
+
+Return structured JSON/Pydantic output.
+
+============================================================
+ENDPOINT DETECTION
+============================================================
+
+Create an EndpointDetector.
+
+Support:
+
+- regression
+- binary classification
+- multiclass classification
+- multitask regression
+- multitask classification
+
+Potential endpoint examples:
+
+pIC50
+pEC50
+IC50
+EC50
+Ki
+Kd
+logS
+logP
+toxicity
+inhibition
+activity
+binding affinity
+
+Do NOT infer scientific units solely from the column name.
+
+Use:
+
+- values
+- datatype
+- unique values
+- metadata
+- column name
+- user information
+
+Return:
+
+task_type
+endpoint_name
+units_if_known
+transformation_status
+confidence
+reasoning
+
+If endpoint semantics are ambiguous, ask for clarification or mark
+the uncertainty rather than silently making an assumption.
+
+============================================================
+CHEMICAL STANDARDIZATION
+============================================================
+
+Use RDKit.
+
+Create independent modules for:
+
+- SMILES validation
+- sanitization
+- canonical SMILES
+- salt handling
+- optional tautomer standardization
+- charge handling
+- stereochemistry preservation
+
+IMPORTANT:
+
+Never destroy the original SMILES.
+
+Store:
+
+original_smiles
+standardized_smiles
+transformation_log
+
+Do not silently remove molecules.
+
+Every removal must have a reason.
+
+============================================================
+DATA QUALITY
+============================================================
+
+Implement:
+
+- missing-value analysis
+- invalid SMILES detection
+- duplicate detection
+- duplicate chemical structure detection
+- conflicting-label detection
+- class imbalance
+- outlier diagnostics
+- target distribution analysis
+- chemical-space coverage
+- leakage detection
+
+The agent should distinguish between:
+
+DATA ERROR
+
+and
+
+SCIENTIFICALLY VALID EXTREME VALUE.
+
+Do not automatically remove outliers.
+
+============================================================
+REPRESENTATION PLUGIN SYSTEM
+============================================================
+
+Create:
+
+RepresentationPlugin
+
+Interface:
+
+- name
+- version
+- applicability()
+- estimate_cost()
+- fit()
+- transform()
+- metadata()
+
+Initial representations:
+
+1. Morgan fingerprints
+2. RDKit fingerprints
+3. MACCS
+4. Atom Pair
+5. Topological Torsion
+6. RDKit descriptors
+7. Mordred descriptors
+8. molecular graph representation
+9. learned graph embeddings
+10. SMILES embeddings through optional foundation-model plugin
+
+Representations should be treated as separate feature spaces.
+
+The agent should be able to discover that different feature spaces
+provide different predictive/generalization behavior.
+
+============================================================
+MODELING STRATEGY PLUGINS
+============================================================
+
+Create:
+
+ModelPlugin
+
+Initial classical models:
+
+- Ridge
+- ElasticNet
+- RandomForest
+- ExtraTrees
+- SVR
+- XGBoost
+- LightGBM if installed
+
+Deep learning:
+
+- MLP
+- GCN
+- GAT
+- MPNN
+
+Automated ML:
+
+- AutoGluon
+
+Foundation-model representations:
+
+Create an abstraction, but do not require a GPU.
+
+The system should be able to use pretrained molecular embeddings
+when available.
+
+============================================================
+VALIDATION PLUGINS
+============================================================
+
+Create:
+
+ValidationPlugin
+
+Implement:
+
+- random split
+- stratified random split
+- scaffold split
+- cluster split
+- repeated cross-validation
+- temporal split if temporal metadata exists
+- external test set
+
+The agent must select validation according to the dataset.
+
+Do not report only random-split performance.
+
+For chemistry-heavy datasets, scaffold validation should be considered.
+
+============================================================
+TRUSTWORTHINESS ENGINE
+============================================================
+
+This is a CORE component.
+
+Do not define "best QSAR model" solely by RMSE/R2/AUC.
+
+Implement TrustEvaluator plugins.
+
+Categories:
+
+1. Predictive performance
+
+Regression:
+
+- RMSE
+- MAE
+- R2
+- Pearson
+- Spearman
+
+Classification:
+
+- ROC-AUC
+- PR-AUC
+- balanced accuracy
+- MCC
+- F1
+- sensitivity
+- specificity
+
+2. Generalization
+
+- scaffold performance
+- cluster performance
+- external test performance
+
+3. Robustness
+
+- random seed sensitivity
+- split sensitivity
+- perturbation sensitivity
+
+4. Applicability domain
+
+- nearest-neighbor similarity
+- chemical-space distance
+- OOD indicators
+
+5. Uncertainty
+
+- ensemble uncertainty
+- conformal prediction if implemented
+- calibration
+
+6. Explainability
+
+- SHAP
+- feature importance
+- attribution stability
+
+7. Chemical consistency
+
+Where applicable, determine whether the model's important
+features correspond to chemically meaningful patterns.
+
+============================================================
+FAILURE DIAGNOSIS
+============================================================
+
+Create:
+
+FailureDiagnosisPlugin
+
+Examples:
+
+Random split strong
++
+Scaffold split weak
+
+= possible chemical-series dependence.
+
+Train strong
++
+Validation weak
+
+= possible overfitting.
+
+Accuracy strong
++
+PR-AUC poor
+
+= possible class imbalance problem.
+
+Performance strong
++
+OOD performance poor
+
+= limited applicability domain.
+
+Explanation unstable
++
+Performance variable
+
+= unstable representation/model.
+
+The diagnosis must contain:
+
+failure_type
+evidence
+hypothesis
+confidence
+recommended_actions
+
+============================================================
+SELF-CORRECTION
+============================================================
+
+The agent must not simply say:
+
+"Model performance is poor."
+
+It must propose a scientifically justified intervention.
+
+Example:
+
+Problem:
+Scaffold performance is poor.
+
+Potential interventions:
+
+- alternative representation
+- graph model
+- stronger regularization
+- different feature space
+- scaffold-aware model selection
+- ensemble
+- additional validation
+
+The agent ranks interventions by:
+
+expected improvement
++
+expected trust gain
+/
+compute cost
+
+Then runs the highest-value experiment.
+
+============================================================
+SCIENTIFIC MEMORY
+============================================================
+
+Store all experiments.
+
+Each experiment must contain:
+
+- dataset hash
+- preprocessing version
+- representation
+- model
+- hyperparameters
+- split
+- random seed
+- metrics
+- trust metrics
+- runtime
+- memory
+- LLM decision
+- rationale
+- result
+- failure diagnosis
+- intervention
+
+The agent must avoid repeating identical failed experiments.
+
+============================================================
+STOPPING RULES
+============================================================
+
+Stop if:
+
+1. compute budget exhausted
+2. experiment budget exhausted
+3. trustworthiness threshold achieved
+4. improvement becomes negligible
+5. expected improvement / compute cost becomes too low
+6. no unexplored applicable strategies remain
+
+The final report must explicitly state why the agent stopped.
+
+============================================================
+PLUGIN REGISTRY
+============================================================
+
+Create:
+
+PluginRegistry
+
+Support:
+
+EndpointPlugin
+PreprocessingPlugin
+RepresentationPlugin
+ModelPlugin
+ValidationPlugin
+TrustPlugin
+UncertaintyPlugin
+ExplainabilityPlugin
+DiagnosisPlugin
+InterventionPlugin
+LLMProviderPlugin
+ReportingPlugin
+
+Adding a new plugin must not require modification of LangGraph nodes.
+
+============================================================
+PROJECT STRUCTURE
+============================================================
+
+Create:
+
+cta_qsar/
+
+    pyproject.toml
+
+    README.md
+
+    .env.example
+
+    .gitignore
+
+    Dockerfile
+
+    configs/
+        default.yaml
+        cpu.yaml
+        development.yaml
+
+    src/
+        cta_qsar/
+
+            core/
+                state.py
+                config.py
+                interfaces.py
+                registry.py
+                exceptions.py
+                logging.py
+
+            orchestration/
+                graph.py
+                nodes.py
+                routing.py
+                policies.py
+
+            agents/
+                scientist.py
+                profiler_agent.py
+                planner_agent.py
+                diagnosis_agent.py
+                critic_agent.py
+
+            llm/
+                base.py
+                openrouter.py
+                huggingface.py
+                structured_output.py
+
+            chemistry/
+                standardization.py
+                validation.py
+                chemical_space.py
+                fingerprints.py
+                descriptors.py
+
+            endpoints/
+                base.py
+                detector.py
+                regression.py
+                classification.py
+                multitask.py
+
+            representations/
+                base.py
+                registry.py
+                fingerprints/
+                descriptors/
+                graph/
+                embeddings/
+
+            models/
+                base.py
+                registry.py
+                classical/
+                deep/
+                foundation/
+                automl/
+
+            validation/
+                base.py
+                random_split.py
+                scaffold_split.py
+                cluster_split.py
+                temporal_split.py
+
+            trust/
+                base.py
+                predictive.py
+                generalization.py
+                robustness.py
+                uncertainty.py
+                applicability.py
+                explainability.py
+                chemical_consistency.py
+
+            experiments/
+                candidate.py
+                planner.py
+                runner.py
+                budget.py
+                tracker.py
+
+            diagnosis/
+                failure.py
+                hypotheses.py
+                interventions.py
+
+            memory/
+                store.py
+                experiment_memory.py
+
+            reporting/
+                report.py
+                export.py
+
+            hardware/
+                profiler.py
+
+            cli/
+                main.py
+
+    tests/
+        unit/
+        integration/
+        fixtures/
+
+    examples/
+        regression.csv
+        classification.csv
+
+    docs/
+        architecture.md
+        workflow.md
+        plugin_development.md
+        llm_providers.md
+        reproducibility.md
+
+============================================================
+CONFIGURATION
+============================================================
+
+Create YAML configuration such as:
+
+llm:
+    provider: openrouter
+    model: "CHANGE_ME"
+    temperature: 0.1
+    max_tokens: 4096
+
+compute:
+    max_minutes: 30
+    max_experiments: 12
+    max_memory_gb: 16
+    gpu_required: false
+
+representations:
+    enabled:
+        - morgan
+        - rdkit
+        - mordred
+        - graph
+
+models:
+    enabled:
+        - ridge
+        - random_forest
+        - xgboost
+        - svm
+        - autogluon
+
+validation:
+    enabled:
+        - random
+        - scaffold
+        - repeated_cv
+
+trust:
+    required:
+        - predictive
+        - generalization
+        - applicability_domain
+        - robustness
+
+============================================================
+LLM PROMPTS
+============================================================
+
+Do not create one giant prompt for every operation.
+
+Create specialized prompts:
+
+1. Case understanding prompt
+2. Strategy planning prompt
+3. Experiment selection prompt
+4. Failure diagnosis prompt
+5. Self-correction prompt
+6. Final scientific reporting prompt
+
+All prompts must require structured JSON/Pydantic output.
+
+The LLM must cite the evidence it received from tools.
+
+The LLM must never fabricate experimental results.
+
+============================================================
+AGENT DECISION POLICY
+============================================================
+
+The LLM should reason using this sequence:
+
+A. What is the QSAR problem?
+
+B. What is known about the dataset?
+
+C. What are the important risks?
+
+D. Which validation strategy is scientifically appropriate?
+
+E. Which representations are plausible?
+
+F. Which modeling paradigms are computationally feasible?
+
+G. Which experiment has the highest expected scientific value?
+
+H. What happened?
+
+I. What failed?
+
+J. What intervention is justified?
+
+K. Is another experiment worthwhile?
+
+This should be implemented as explicit structured state.
+
+============================================================
+COMPUTATIONAL EFFICIENCY
+============================================================
+
+The agent must prefer:
+
+cheap experiment first
+
+unless there is a scientific reason not to.
+
+For example:
+
+Morgan + Ridge
+
+before:
+
+large deep neural network.
+
+Do not automatically test every combination.
+
+Use experiment history to avoid redundant experiments.
+
+============================================================
+FIRST COMPLETE WORKFLOW
+============================================================
+
+Before implementing every advanced feature, implement a complete
+working vertical slice:
+
+INPUT
+ ↓
+CSV
+ ↓
+Dataset profiling
+ ↓
+Endpoint detection
+ ↓
+RDKit validation
+ ↓
+Morgan fingerprints
+ ↓
+RDKit descriptors
+ ↓
+Ridge
+ ↓
+RandomForest
+ ↓
+XGBoost
+ ↓
+Random split
+ ↓
+Scaffold split
+ ↓
+Trust evaluation
+ ↓
+Failure diagnosis
+ ↓
+Next experiment
+ ↓
+Final report
+
+Only after this works should you add:
+
+Mordred
+GNN
+foundation embeddings
+uncertainty
+SHAP
+additional validation
+advanced experiment planning
+
+============================================================
+EXPERIMENT REPORT
+============================================================
+
+Produce a final report containing:
+
+1. Dataset summary
+2. Endpoint identification
+3. Data quality
+4. Chemical standardization
+5. Chemical-space characterization
+6. Validation strategy
+7. Representations considered
+8. Models considered
+9. Experiments performed
+10. Performance comparison
+11. Scaffold/generalization results
+12. Applicability-domain results
+13. Uncertainty results
+14. Explainability results
+15. Failure diagnoses
+16. Self-correction experiments
+17. Computational cost
+18. Final model
+19. Why the model was selected
+20. Limitations
+21. Recommended next experiments
+22. Full provenance
+
+============================================================
+CLI
+============================================================
+
+Implement:
+
+cta-qsar profile data.csv
+
+cta-qsar run \
+    --data data.csv \
+    --smiles-column SMILES \
+    --target-column pIC50 \
+    --budget 30
+
+cta-qsar report RUN_ID
+
+cta-qsar list-models
+
+cta-qsar list-representations
+
+cta-qsar list-validation
+
+============================================================
+TESTING
+============================================================
+
+Create tests for:
+
+- valid regression dataset
+- binary classification dataset
+- imbalanced classification
+- duplicate molecules
+- conflicting labels
+- invalid SMILES
+- scaffold-heavy dataset
+- missing values
+- ambiguous endpoint
+- budget exhaustion
+- failed experiment
+- self-correction
+- plugin registration
+- LLM provider switching
+
+The end-to-end test must run without a GPU.
+
+For tests, mock the LLM.
+
+Do not make tests depend on a live API.
+
+============================================================
+REPRODUCIBILITY
+============================================================
+
+Every run must record:
+
+- timestamp
+- git commit if available
+- Python version
+- package versions
+- dataset hash
+- configuration
+- random seeds
+- hardware profile
+- LLM provider
+- LLM model
+- model parameters
+- experiment results
+
+============================================================
+QUALITY REQUIREMENTS
+============================================================
+
+Use:
+
+Python 3.11+
+
+Pydantic
+
+LangGraph
+
+RDKit
+
+scikit-learn
+
+XGBoost
+
+MLflow
+
+pytest
+
+Ruff
+
+Type hints
+
+Structured logging
+
+Environment variables
+
+Do not hard-code credentials.
+
+Do not silently suppress exceptions.
+
+Do not create unnecessary dependencies.
+
+Do not introduce a multi-agent swarm unless it is clearly justified.
+
+Use one primary scientific reasoning agent with deterministic tools
+and specialized graph nodes.
+
+============================================================
+IMPORTANT SCIENTIFIC REQUIREMENT
+============================================================
+
+The central novelty of the architecture should be:
+
+The agent does not merely select a machine-learning algorithm.
+
+It autonomously discovers and evaluates:
+
+representation space
++
+modeling paradigm
++
+validation strategy
++
+trustworthiness strategy
+
+and then self-corrects based on observed failures.
+
+The system must be capable of choosing, for example:
+
+Morgan + RandomForest
+
+or
+
+Mordred + XGBoost
+
+or
+
+Morgan + SVR
+
+or
+
+Graph + MPNN
+
+or
+
+foundation embedding + classical ML
+
+or
+
+hybrid representation + ensemble
+
+depending on the dataset.
+
+============================================================
+IMPORTANT: DO NOT CHEAT
+============================================================
+
+Do not claim that the system has discovered the best model
+unless experiments actually support that claim.
+
+Use terms such as:
+
+best observed strategy under the specified budget
+
+rather than:
+
+globally optimal model.
+
+Do not fabricate chemical interpretations.
+
+Do not fabricate literature references.
+
+============================================================
+DEVELOPMENT PROCESS
+============================================================
+
+Start by inspecting the existing VS Code workspace.
+
+If the workspace is empty:
+create the project from scratch.
+
+If code already exists:
+reuse useful code and refactor it.
+
+Do not destroy existing working code without reason.
+
+PHASE 1:
+Create architecture and core interfaces.
+
+PHASE 2:
+Implement dataset profiling and chemistry preprocessing.
+
+PHASE 3:
+Implement representation and model registries.
+
+PHASE 4:
+Implement validation.
+
+PHASE 5:
+Implement trust evaluator.
+
+PHASE 6:
+Implement LangGraph orchestration.
+
+PHASE 7:
+Implement LLM abstraction and OpenRouter/HuggingFace providers.
+
+PHASE 8:
+Implement experiment planner.
+
+PHASE 9:
+Implement failure diagnosis and self-correction.
+
+PHASE 10:
+Implement MLflow tracking and final reporting.
+
+PHASE 11:
+Run tests.
+
+PHASE 12:
+Run an end-to-end synthetic QSAR example.
+
+PHASE 13:
+Fix all errors.
+
+PHASE 14:
+Create documentation.
+
+After each phase:
+- run relevant tests;
+- inspect errors;
+- fix them;
+- do not continue with broken foundations.
+
+============================================================
+FINAL REQUIREMENT
+============================================================
+
+At the end, I should be able to run:
+
+cta-qsar run \
+    --data my_qsar_dataset.csv \
+    --smiles-column SMILES \
+    --target-column pIC50 \
+    --budget 30
+
+and the system should autonomously execute the complete workflow.
+
+The system must be usable without a GPU.
+
+The LLM must be replaceable.
+
+The QSAR modules must be replaceable.
+
+The representation modules must be replaceable.
+
+The model modules must be replaceable.
+
+The validation modules must be replaceable.
+
+The trust modules must be replaceable.
+
+The system must therefore function as a modular
+AUTONOMOUS QSAR SCIENTIST rather than a fixed QSAR pipeline.
+
+BEGIN IMPLEMENTATION NOW.
+
+First inspect the workspace, then create the architecture,
+then implement Phase 1 and continue sequentially.
+
+Do not stop merely because the architecture is complete.
+Build and test the actual system.
