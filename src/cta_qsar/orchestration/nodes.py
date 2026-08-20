@@ -600,8 +600,48 @@ def decide_next_action(state: dict[str, Any]) -> str:
         candidates_remaining=max(candidates_remaining, 0),
         llm_stop=llm_stop,
     )
+    decision = _apply_trust_gate(
+        decision,
+        state=state,
+        config=config,
+        budget=budget_info,
+        candidates_remaining=max(candidates_remaining, 0),
+    )
     agent_log("route", f"decision: {decision}")
     return decision
+
+
+def _apply_trust_gate(
+    decision: str,
+    *,
+    state: dict[str, Any],
+    config: Config,
+    budget: dict[str, Any],
+    candidates_remaining: int,
+) -> str:
+    """Enforce the trust gate: do not finalize while the latest validated
+    strategy is untrustworthy on the configured required axes.
+
+    The gate is *advisory force* -- it never vetoes an experiment, it only
+    postpones stopping. Budget exhaustion always wins (no infinite loops), as
+    does candidate exhaustion.
+    """
+    required = getattr(config.trust, "required", []) or []
+    if not required or decision != "finalize_report":
+        return decision
+    reasons = list(state.get("stop_reasons", []) or [])
+    if any("budget exhausted" in r for r in reasons) or candidates_remaining <= 0:
+        return decision
+    verdicts = state.get("trust_verdicts", {}) or {}
+    failed = [axis for axis in required if verdicts.get(axis) not in ("good", "wide")]
+    if not failed:
+        return decision
+    logger.info(
+        "trust gate: finalize blocked, awaiting %s (verdicts=%s)",
+        ", ".join(failed),
+        verdicts,
+    )
+    return "plan_experiment"
 
 
 def _no_improvement_rounds(experiments: list[Any]) -> int:
@@ -693,11 +733,12 @@ def finalize_report(state: dict[str, Any]) -> dict[str, Any]:
     if knowledge_context:
         from cta_qsar.knowledge.explain import append_trace
 
+        selected = state.get("selected_candidate") or {}
         append_trace(
             {
                 "round": knowledge_context.get("round", 0),
-                "chosen": state.get("selected_candidate", {}).get("representation", ""),
-                "reason": state.get("selected_candidate", {}).get("reason", ""),
+                "chosen": selected.get("representation", ""),
+                "reason": selected.get("reason", ""),
                 "evidence": knowledge_context.get("facts", []),
                 "winner": None,
                 "winner_boost": None,

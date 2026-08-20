@@ -74,7 +74,7 @@ def test_execute_failure_is_recorded_not_fatal(monkeypatch: pytest.MonkeyPatch) 
         "target_column": "y",
         "raw_df": None,
         "standardized_df": None,
-        "config": type("Cfg", (), {"experiment": type("E", (), {"n_splits": 2, "n_repeats": 1, "test_fraction": 0.2, "random_seed": 42, "hyperparameter_search": False})(), "compute": type("C", (), {"max_experiments": 5, "max_minutes": 30, "max_memory_gb": 8})()})(),
+        "config": type("Cfg", (), {"experiment": type("E", (), {"n_splits": 2, "n_repeats": 1, "test_fraction": 0.2, "random_seed": 42, "hyperparameter_search": False})(), "compute": type("C", (), {"max_experiments": 5, "max_minutes": 30, "max_memory_gb": 8})(), "trust": type("T", (), {"required": []})()})(),
         "endpoint": {"task_type": "regression"},
         "experiments": [],
     }
@@ -122,7 +122,8 @@ def _routing_state(**overrides: object) -> dict[str, object]:
         "config": type(
             "Cfg",
             (),
-            {"compute": type("C", (), {"max_experiments": 5, "max_minutes": 30})()},
+            {"compute": type("C", (), {"max_experiments": 5, "max_minutes": 30})(),
+             "trust": type("T", (), {"required": []})()},
         )(),
         "experiments": [],
         "candidates": [],
@@ -216,6 +217,44 @@ def test_decide_next_action_survives_llm_failure(monkeypatch: pytest.MonkeyPatch
     )
     decision = decide_next_action(_routing_state())
     assert decision == "plan_experiment"  # degrades to heuristic policy
+
+
+def test_trust_gate_blocks_finalize_when_untrustworthy() -> None:
+    from cta_qsar.orchestration.nodes import _apply_trust_gate
+
+    state = {
+        "stop_reasons": ["improvement negligible in latest experiment"],
+        "trust_verdicts": {"predictive": "weak", "generalization": "good"},
+    }
+    config = type("Cfg", (), {"trust": type("T", (), {"required": ["predictive", "generalization"]})()})()
+    budget = {"max_experiments": 6, "max_minutes": 30, "elapsed_minutes": 1.0}
+    assert _apply_trust_gate("finalize_report", state=state, config=config, budget=budget, candidates_remaining=3) == "plan_experiment"
+
+
+def test_trust_gate_allows_finalize_when_trustworthy() -> None:
+    from cta_qsar.orchestration.nodes import _apply_trust_gate
+
+    state = {
+        "stop_reasons": ["improvement negligible in latest experiment"],
+        "trust_verdicts": {"predictive": "good", "generalization": "good"},
+    }
+    config = type("Cfg", (), {"trust": type("T", (), {"required": ["predictive", "generalization"]})()})()
+    budget = {"max_experiments": 6, "max_minutes": 30, "elapsed_minutes": 1.0}
+    assert _apply_trust_gate("finalize_report", state=state, config=config, budget=budget, candidates_remaining=3) == "finalize_report"
+
+
+def test_trust_gate_yields_to_budget_and_disabled_required() -> None:
+    from cta_qsar.orchestration.nodes import _apply_trust_gate
+
+    config = type("Cfg", (), {"trust": type("T", (), {"required": []})()})()
+    budget = {"max_experiments": 6, "max_minutes": 30, "elapsed_minutes": 1.0}
+    weak = {"stop_reasons": ["improvement negligible in latest experiment"], "trust_verdicts": {"predictive": "weak"}}
+    # no required axes -> no gating
+    assert _apply_trust_gate("finalize_report", state=weak, config=config, budget=budget, candidates_remaining=3) == "finalize_report"
+    # exhausted budget wins even with required axes
+    strict = type("Cfg", (), {"trust": type("T", (), {"required": ["predictive"]})()})()
+    depleted = dict(weak, stop_reasons=["experiment budget exhausted"])
+    assert _apply_trust_gate("finalize_report", state=depleted, config=strict, budget=budget, candidates_remaining=3) == "finalize_report"
 
 
 def test_unavailable_plugin_raises_clear_error() -> None:

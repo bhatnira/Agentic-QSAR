@@ -59,6 +59,7 @@ class QSARState(TypedDict, total=False):
 
     # -- trust & diagnosis
     trust_reports: list[dict[str, Any]]
+    trust_verdicts: dict[str, str]
     diagnoses: list[FailureDiagnosis]
 
     # -- budget

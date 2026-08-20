@@ -189,8 +189,21 @@ def run_baseline(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int) -> dict
     }
 
 
-def run_agent(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int, *, search: bool, llm_provider: str = "mock") -> dict[str, Any]:
-    """One full autonomous run at the given seed (provider mock|nvidia)."""
+def run_agent(
+    df: pd.DataFrame,
+    dataset: BenchmarkDataset,
+    seed: int,
+    *,
+    search: bool,
+    llm_provider: str = "mock",
+    trust_gate: bool = True,
+) -> dict[str, Any]:
+    """One full autonomous run at the given seed (provider mock|nvidia).
+
+    ``trust_gate=False`` disables the trust gate (ablation): the agent may
+    finalize as soon as the stopping policy triggers, regardless of whether
+    the latest validated strategy is trustworthy.
+    """
     from cta_qsar.agents.scientist import QSARScientist
 
     config = build_config(
@@ -206,6 +219,8 @@ def run_agent(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int, *, search:
     config.dataset.target_column = dataset.target_column
     config.reporting["output_dir"] = str(RUNS_ROOT)
     config.knowledge.evidence_path = str(KNOWLEDGE_EVIDENCE)
+    if not trust_gate:
+        config.trust.required = []
     data_csv = DATA_DIR / f"{dataset.name}_seed{seed}.csv"
     df.to_csv(data_csv, index=False)
     scientist = QSARScientist(config)
@@ -225,8 +240,16 @@ def run_agent(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int, *, search:
             best_exp = exp
     if best_exp is None:
         raise RuntimeError(f"no completed experiments for {dataset.name} seed {seed}")
+    if llm_provider == "nvidia":
+        scenario = "agent-nvidia"
+    elif not search:
+        scenario = "agent-nosearch"
+    elif not trust_gate:
+        scenario = "agent-nogate"
+    else:
+        scenario = "agent-mock"
     return {
-        "scenario": "agent-nvidia" if llm_provider == "nvidia" else ("agent-mock" if search else "agent-nosearch"),
+        "scenario": scenario,
         "best_model": f"{best_exp['representation']}+{best_exp['model']}[{best_exp['split']}]",
         "best_hyperparams": json.dumps(best_exp.get("hyperparameters", {})),
         "primary": primary,
@@ -238,17 +261,19 @@ def run_agent(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int, *, search:
     }
 
 
-def refresh_evidence(new_results: list[Path] | None = None) -> Any:
-    """Reload + re-ingest all results into the knowledge evidence store.
+def refresh_evidence(new_results: list[Path] | None = None, *, roots: list[Path] | None = None) -> Any:
+    """Reload + re-ingest results into the knowledge evidence store.
 
     Idempotent: merges are keyed by (triple, run_id) with a rolling window, so
-    re-running a benchmark only appends genuinely new runs.
+    re-running a benchmark only appends genuinely new runs. ``roots`` limits
+    ingestion to specific results dirs (used with --fresh-evidence).
     """
     from cta_qsar.knowledge.facts import EvidenceStore
     from cta_qsar.knowledge.ingestor import ingest_results_file, ingest_results_glob
 
     store = EvidenceStore.load(KNOWLEDGE_EVIDENCE)
-    ingest_results_glob(store, RESULTS_ROOT)
+    for root in roots or [RESULTS_ROOT]:
+        ingest_results_glob(store, root)
     for results_file in new_results or []:
         ingest_results_file(store, results_file)
     store.save(KNOWLEDGE_EVIDENCE)
@@ -259,13 +284,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--datasets", default="esol", help="comma-separated subset of esol,freesolv,lipophilicity,bace,bbbp,clintox")
     parser.add_argument("--seeds", default="0,1", help="comma-separated random seeds")
-    parser.add_argument("--scenarios", default="grid,agent-mock", help="comma-separated: grid,agent-mock,agent-nosearch,agent-nvidia")
+    parser.add_argument("--scenarios", default="grid,agent-mock",
+                        help="comma-separated: grid,agent-mock,agent-nosearch,agent-nvidia,agent-nogate")
+    parser.add_argument("--fresh-evidence", action="store_true",
+                        help="start the knowledge evidence store from zero (ignore prior results dirs)")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip (dataset, seed, scenario) combos already present in the most recent results.csv")
     args = parser.parse_args(argv)
 
     datasets = [DATASETS[name] for name in args.datasets.split(",") if name in DATASETS]
     seeds = [int(s) for s in args.seeds.split(",")]
     scenarios = [s for s in args.scenarios.split(",")
-                 if s in ("grid", "agent-mock", "agent-nosearch", "agent-nvidia")]
+                 if s in ("grid", "agent-mock", "agent-nosearch", "agent-nvidia", "agent-nogate")]
     if not datasets or not seeds or not scenarios:
         parser.error("need valid --datasets, --seeds, --scenarios")
     if "agent-nvidia" in scenarios and not any(
@@ -273,11 +303,29 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error("agent-nvidia requires NVIDIA_API_KEY/OPENAI_API_KEY in the environment")
     get_registry().auto_discover()
+    resume_done: set[tuple[str, int, str]] = set()
+    if args.resume:
+        stamps = sorted(RESULTS_ROOT.glob("*/results.csv"))
+        if not stamps:
+            parser.error("--resume requested but no previous results.csv found")
+        prev = pd.read_csv(stamps[-1]).dropna(subset=["primary_value"])
+        resume_done = {
+            (str(row.dataset), int(row.seed), str(row.scenario))
+            for row in prev.itertuples(index=False)
+        }
+        print(f"resume: {len(resume_done)} completed combos will be skipped", flush=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out_dir = RESULTS_ROOT / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    refresh_evidence()
+    if args.fresh_evidence:
+        from cta_qsar.knowledge.facts import EvidenceStore
+
+        EvidenceStore().save(KNOWLEDGE_EVIDENCE)
+        print("fresh evidence: knowledge store reset to empty", flush=True)
+        refresh_evidence(roots=[out_dir])
+    else:
+        refresh_evidence()
 
     meta = {
         "timestamp": stamp,
@@ -288,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         "primary_metric": "rmse (regression) / roc_auc (binary)",
         "notes": ["agent scenarios: heuristic planner (mock LLM) or real NVIDIA LLM, hyperparameter search on",
                   "agent-nosearch: agent with hyperparameter search disabled (ablation)",
+                  "agent-nogate: agent with the trust gate disabled (ablation)",
+                  "trust gate enforced unless trust.required is empty",
                   "grid scenario: static hyperparameter grid, identical folds/metrics"],
     }
     rows: list[dict[str, Any]] = []
@@ -297,6 +347,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"   rows={len(df)} task={dataset.task_type}")
         for seed in seeds:
             for scenario in scenarios:
+                if (dataset.name, seed, scenario) in resume_done:
+                    print(f"   seed={seed} scenario={scenario} (resumed: skip)", flush=True)
+                    continue
                 started = time.time()
                 print(f"   seed={seed} scenario={scenario} ...", flush=True)
                 try:
@@ -305,8 +358,9 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         result = run_agent(
                             df, dataset, seed,
-                            search=(scenario == "agent-mock"),
+                            search=(scenario in ("agent-mock", "agent-nogate", "agent-nvidia")),
                             llm_provider=("nvidia" if scenario == "agent-nvidia" else "mock"),
+                            trust_gate=(scenario != "agent-nogate"),
                         )
                     result.update({"dataset": dataset.name, "task_type": dataset.task_type, "rows": len(df)})
                     rows.append(result)
