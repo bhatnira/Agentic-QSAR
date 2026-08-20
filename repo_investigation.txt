@@ -578,6 +578,14 @@ board for regression|small rendered into the report and plan_trace.jsonl
 written when evidence_path configured; empty store degrades to "(no
 accumulated evidence)" with unchanged heuristic behavior.
 
+Committed as 0ccbb5c ("knowledge graph evidence layer: store, ingestors,
+planner grounding, explainability"), pushed to origin/main; working tree
+clean at update time. benchmarks/knowledge/evidence.jsonl regenerated from
+the six existing results dirs via refresh_evidence() (24 distinct keys,
+idempotent); docs updated in README.md ("Knowledge & evidence layer"
+section + project layout) and docs/reproducibility.md ("Planning
+transparency").
+
 ================================================================================
 END OF REPORT
 ================================================================================
