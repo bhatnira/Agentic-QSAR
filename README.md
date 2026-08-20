@@ -78,6 +78,34 @@ cta-qsar report RUN_ID                         # re-render a report
 cta-qsar list-models | list-representations | list-validation
 ```
 
+Reproducible runs: pass a seed and (optionally) enable hyperparameter search:
+
+```bash
+cta-qsar run --data data.csv --seed 42 --hyperparameter-search \
+             --budget 10
+```
+
+Each run snapshots the effective config in `provenance.json`, records
+dependency versions in `environment.txt`, and stores per-experiment results as
+JSONL.
+
+## Benchmarks
+
+Multi-dataset benchmark harness over six MoleculeNet benchmarks (ESOL,
+FreeSolv, Lipophilicity, BACE, BBBP, ClinTox) with identical CV folds and
+metric definitions across scenarios — static hyperparameter grid, autonomous
+agent with heuristic planner, and optionally the agent with a real LLM:
+
+```bash
+python3 benchmarks/run_benchmark.py \
+    --datasets esol,freesolv,bace,bbbp,clintox,lipophilicity \
+    --seeds 0,1,2 --scenarios grid,agent-mock,agent-nosearch
+```
+
+Results land in `benchmarks/results/` (CSV + per-dataset summary JSON); raw
+run artifacts live in `benchmarks/runs/`. `agent-nvidia` additionally requires
+`NVIDIA_API_KEY`.
+
 CSV, TSV, and Parquet are supported. `--smiles-column` and `--target-column`
 are optional — automatic detection is attempted first.
 
@@ -111,6 +139,16 @@ src/cta_qsar/
 - [Plugin development](docs/plugin_development.md)
 - [LLM providers](docs/llm_providers.md)
 - [Reproducibility](docs/reproducibility.md)
+
+## Reproducibility
+
+- `requirements.lock` pins the exact dependency set used for the benchmark
+  results (install with `pip install -r requirements.lock`).
+- Every run stores its effective config (`provenance.json`), dependency
+  versions (`environment.txt`), and experiment records (`experiments.jsonl`).
+- Seeds are fully configurable (`--seed` / `experiment.random_seed`) and thread
+  through splitting, grid-search, and model init.
+- If you use CTA-QSAR in a publication, please cite it — see `CITATION.cff`.
 
 ## Scope
 

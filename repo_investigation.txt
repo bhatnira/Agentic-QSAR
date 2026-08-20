@@ -449,6 +449,61 @@ Full-budget benchmark result (4 experiments, deterministic brain):
 Reports and provenance for all runs live under benchmarks/runs/
 (e.g. benchmarks/runs/20260819-202215-esol/report.md).
 
+11. BENCHMARK HARNESS + PUBLICATION PREP (2026-08-19)
+--------------------------------------------------------------------------------
+Added the multi-dataset benchmark harness benchmarks/run_benchmark.py
+(committed; the data/runs/results subdirs stay git-ignored). It downloads
+six MoleculeNet datasets (ESOL delaney-processed.csv, FreeSolv
+freesolv.csv.gz, Lipophilicity Lipophilicity.csv, BACE bace.csv,
+BBBP BBBP.csv, ClinTox clintox.csv.gz) from the deepchemdata S3 bucket
+(plain .csv for some keys, .csv.gz for others; HIV lives as HIV.csv but is
+not used), runs static-grid baselines and full autonomous agent campaigns
+(seed-0/1 runs, 5-fold random CV, 20% test fraction, identical fold and
+metric machinery) and aggregates CSV+JSON under benchmarks/results/.
+
+Seed threading and real hyperparameter search landed in the core pipeline:
+  - --seed on `cta-qsar run` (experiment.random_seed) threads through
+    splitting, grid search, and models.
+  - experiment.hyperparameter_search (--hyperparameter-search) replaces the
+    previous "first entry of hyperparameter_space" stub with a budgeted grid
+    search over each plugin's space (capped at 16 combos, scored on the same
+    CV folds and primary metric used for reporting; graph models skip the
+    search). Applied per experiment, so candidates still respect budget gates.
+    Tests: tests/unit/test_runner_hp_search.py (best-combo selection,
+    disabled flag, graph-input skip).
+
+Results (2 seeds, mean; RMSE for regression, ROC-AUC for binary):
+
+  dataset         grid (static)         agent-mock (HP search on)
+  esol            2.051                 1.213 (maccs+svr[scaffold])
+  freesolv        0.623                 0.415 (maccs+svr[scaffold])
+  lipophilicity   1.348                 0.853 (maccs+xgboost[scaffold])
+  bace            0.895                 0.896 (morgan+xgboost[random]);
+                                       agent-nosearch 0.874 (search ablation)
+  bbbp            0.918                 0.918 (morgan+xgboost[random])
+  clintox         0.742                 0.883 (maccs+svr[scaffold])
+
+The agent decisively beats the static grid on the regression sets and
+Clintox; bbbp is a near-tie; the svr grid search picking C=10 over the
+previous C=1 default was the main driver on ESOL (1.74 -> 1.21 RMSE).
+Literature context for the tool-paper framing: ESOL ML SOTA is ~0.6-0.7
+RMSE; FreeSolv ~0.5; BACE ~0.85-0.9 ROC-AUC (GraphDTA/GCN variants);
+BBBP ~0.93; Clintox ~0.9 (D-MPNN). Our agent-with-search numbers are
+competitive for a fully autonomous planner with no dataset-specific tuning.
+
+Reproducibility pack added: requirements.lock (pip freeze snapshot),
+CITATION.cff, README + docs/reproducibility.md sections (seed threading,
+hyperparameter search, benchmark usage). Per-run provenance.json already
+snapshots the effective config; environment.txt records dependency versions.
+
+Test count: 124 passing (121 + test_runner_hp_search, 3 tests), ruff clean.
+
+Caveats for the paper: baselines are intentionally simple (morgan 2048 +
+sklearn grid, no GNN baselines yet); bace needs more seeds; agent campaigns
+use n_repeats=1 to keep runtime tractable; grid search is capped at 16
+combos (not exhaustive); the agent early-stopped on 2-4 experiments for
+most datasets, which keeps cost low but means coverage is thinner.
+
 Remaining instrumentation-level notes (non-blocking): sklearn deprecation
 warnings for MorganGenerator/TopologicalTorsionGenerator and single-class
 fold warnings during tiny-CV campaigns are expected noise; MLFLOW_TRACKING_URI

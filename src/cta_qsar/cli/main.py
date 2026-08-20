@@ -33,6 +33,18 @@ def make_parser() -> argparse.ArgumentParser:
     run.add_argument("--budget", type=int, default=None, help="max experiments")
     run.add_argument("--max-minutes", type=float, default=None)
     run.add_argument("--output", default=None, help="output directory")
+    run.add_argument("--seed", type=int, default=None, help="global random seed")
+    run.add_argument(
+        "--hyperparameter-search",
+        action="store_true",
+        help="run budgeted grid search over model hyperparameters",
+    )
+    run.add_argument(
+        "--no-hyperparameter-search",
+        dest="hyperparameter_search",
+        action="store_false",
+        help="disable configured hyperparameter search",
+    )
 
     report = sub.add_parser("report", help="re-render a report for a run id")
     report.add_argument("run_id")
@@ -106,6 +118,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         max_minutes=args.max_minutes,
         smiles_column=args.smiles_column,
         target_column=args.target_column,
+        seed=args.seed,
+        hyperparameter_search=args.hyperparameter_search,
     )
     scientist = QSARScientist(config, output_root=args.output)
     final = scientist.run(

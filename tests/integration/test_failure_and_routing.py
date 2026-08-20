@@ -74,7 +74,7 @@ def test_execute_failure_is_recorded_not_fatal(monkeypatch: pytest.MonkeyPatch) 
         "target_column": "y",
         "raw_df": None,
         "standardized_df": None,
-        "config": type("Cfg", (), {"experiment": type("E", (), {"n_splits": 2, "n_repeats": 1, "test_fraction": 0.2, "random_seed": 42})(), "compute": type("C", (), {"max_experiments": 5, "max_minutes": 30, "max_memory_gb": 8})()})(),
+        "config": type("Cfg", (), {"experiment": type("E", (), {"n_splits": 2, "n_repeats": 1, "test_fraction": 0.2, "random_seed": 42, "hyperparameter_search": False})(), "compute": type("C", (), {"max_experiments": 5, "max_minutes": 30, "max_memory_gb": 8})()})(),
         "endpoint": {"task_type": "regression"},
         "experiments": [],
     }

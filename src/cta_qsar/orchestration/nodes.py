@@ -375,6 +375,7 @@ def execute_experiment(state: dict[str, Any]) -> dict[str, Any]:
         random_seed=config.experiment.random_seed,
         dataset_hash=dataset_hash(std_df),
         preprocessing_version=state.get("preprocessing_version", "unknown"),
+        hyperparameter_search=config.experiment.hyperparameter_search,
     )
     budget = BudgetState(
         max_experiments=config.compute.max_experiments,

@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use CTA-QSAR in your research, please cite it as follows."
+title: "CTA-QSAR: Chemically Trustworthy Agentic QSAR"
+version: 0.1.0
+date-released: "2026-08-19"
+abstract: >-
+  An agentic QSAR workbench in which an LLM-driven scientist iteratively
+  selects representations, models, and validation strategies, and every
+  proposal is subjected to predictive, generalization, applicability-domain,
+  robustness, and uncertainty trust checks before being accepted into the
+  final report.
+authors:
+  - family-names: "Bhat"
+    given-names: "Nirav"
+url: "https://github.com/bhatnira/Agentic-QSAR"
+keywords:
+  - QSAR
+  - cheminformatics
+  - agentic AI
+  - machine learning
+  - drug discovery
+license: "MIT"

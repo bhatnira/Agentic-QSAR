@@ -19,6 +19,23 @@ Every run persists:
   metrics, runtime, memory, LLM decision, rationale, result, failure
   diagnoses, interventions
 - **environment** — `environment.txt` (sensitive env vars stripped)
+- **dependency lock** — `requirements.lock` pins the exact environment used
+  for published benchmark results (`pip install -r requirements.lock`)
+
+## Seeding
+
+`experiment.random_seed` (default 42) threads through everything stochastic:
+dataset splitting, repeated-CV fold generation, grid hyperparameter search,
+tree-model internal sampling, and GNN weight init (`--seed` on the CLI).
+Benchmark runs must use ≥3 seeds and report mean ± std.
+
+## Hyperparameter searching
+
+`experiment.hyperparameter_search` (default `false`; `--hyperparameter-search`
+on the CLI) runs a budgeted grid search over each model plugin's
+`hyperparameter_space` before the acceptance experiments, optimizing the same
+folds and primary metric used for reporting (RMSE / ROC-AUC / MCC). With the
+flag off, plugins use their first-space hyperparameters.
 
 ## Experiment signature (repeat prevention)
 

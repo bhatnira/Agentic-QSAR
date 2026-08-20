@@ -50,6 +50,7 @@ class ExperimentConfig(BaseModel):
     test_fraction: float = 0.2
     random_seed: int = 42
     min_cv_score_improvement: float = 0.01
+    hyperparameter_search: bool = False
 
 
 class BudgetConfig(BaseModel):
@@ -167,6 +168,8 @@ def build_config(
     max_experiments: int | None = None,
     smiles_column: str | None = None,
     target_column: str | None = None,
+    seed: int | None = None,
+    hyperparameter_search: bool | None = None,
 ) -> Config:
     """Build a Config merging CLI overrides on top of file + env."""
     cfg = Config.load(config_path)
@@ -182,4 +185,8 @@ def build_config(
         cfg.dataset.smiles_column = smiles_column
     if target_column:
         cfg.dataset.target_column = target_column
+    if seed is not None:
+        cfg.experiment.random_seed = seed
+    if hyperparameter_search is not None:
+        cfg.experiment.hyperparameter_search = hyperparameter_search
     return cfg

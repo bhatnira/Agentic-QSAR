@@ -4,6 +4,7 @@ triple and produces a complete scientific ExperimentRecord."""
 from __future__ import annotations
 
 import hashlib
+import itertools
 import time
 import uuid
 from typing import Any
@@ -43,6 +44,7 @@ class ExperimentRunner:
         random_seed: int = 42,
         dataset_hash: str = "",
         preprocessing_version: str = "",
+        hyperparameter_search: bool = False,
     ) -> None:
         self.registry = registry
         self.task_type = task_type
@@ -52,6 +54,7 @@ class ExperimentRunner:
         self.random_seed = random_seed
         self.dataset_hash = dataset_hash
         self.preprocessing_version = preprocessing_version
+        self.hyperparameter_search = hyperparameter_search
 
     def run(
         self,
@@ -118,7 +121,7 @@ class ExperimentRunner:
             n_features = X.shape[1]
         else:
             n_features = getattr(X[0], "n_atoms", None) or len(X[0])
-        hyperparams = self._pick_hyperparams(candidate, n_features, budget)
+        hyperparams = self._pick_hyperparams(candidate, n_features, budget, X=X, y=y)
         estimator = self._build_estimator(
             model_plugin, candidate.model, n_features, hyperparams
         )
@@ -205,13 +208,43 @@ class ExperimentRunner:
             groups=groups,
         )
 
-    def _pick_hyperparams(self, candidate: ExperimentCandidate, n_features: int, budget: BudgetState) -> dict[str, Any]:
+    def _pick_hyperparams(
+        self,
+        candidate: ExperimentCandidate,
+        n_features: int,
+        budget: BudgetState,
+        X: Any | None = None,
+        y: Any | None = None,
+    ) -> dict[str, Any]:
         space = _model_space(self.registry, candidate.model)
         if not space or candidate.hyperparameter_budget <= 1:
             return {}
-        # cheap mode: pick the first candidate combination deterministically
-        choices = {k: v[0] for k, v in space.items()} if space else {}
-        return choices
+        first_choice = {k: v[0] for k, v in space.items()}
+        if not self.hyperparameter_search or X is None or y is None:
+            return first_choice
+        if isinstance(X, list):  # graph inputs are too costly to grid-search
+            return first_choice
+        combos = list(itertools.product(*space.values()))
+        if len(combos) > 16:
+            combos = combos[:16]
+        folds = getattr(self, "_folds_cache", None) or []
+        if not folds:
+            return first_choice
+        names = list(space.keys())
+        best_params, best_score = first_choice, None
+        for combo in combos:
+            params = dict(zip(names, combo, strict=False))
+            estimator = self._build_estimator(
+                self.registry.get("model", candidate.model), candidate.model,
+                n_features, params,
+            )
+            score = _fold_primary_score(
+                estimator, X, np.asarray(y).ravel(), folds, self.task_type
+            )
+            if best_score is None or score > best_score:
+                best_score, best_params = score, params
+        logger.info("grid search %s -> %s (score=%.4f)", candidate.model, best_params, best_score or 0.0)
+        return best_params
 
     def _build_estimator(self, model_plugin: Any, model_name: str, n_features: int, hyperparams: dict[str, Any]) -> Any:
         from cta_qsar.models.registry import build_estimator, wrapped_estimator
@@ -317,6 +350,52 @@ def _extract_primary(trust: dict[str, Any]) -> dict[str, Any]:
             out[key] = round(float(predictive[key]["mean"]), 4)
             out[f"{key}_std"] = round(float(predictive[key]["std"]), 4)
     return out
+
+
+def _fold_primary_score(
+    estimator: Any, X: Any, y: np.ndarray, folds: list[tuple[np.ndarray, np.ndarray]], task_type: str
+) -> float:
+    """Mean primary metric across folds; higher is better (rmse is negated)."""
+    from sklearn import clone
+
+    from cta_qsar.trust.base import (
+        aggregate_folds,
+        classification_metrics,
+        primary_metric,
+        regression_metrics,
+    )
+
+    fold_metrics: list[dict[str, Any]] = []
+    for train_idx, test_idx in folds:
+        if len(test_idx) == 0:
+            continue
+        X_tr, X_te = X[train_idx], X[test_idx]
+        y_tr, y_te = y[train_idx], y[test_idx]
+        try:
+            fitted = clone(estimator).fit(X_tr, y_tr)
+            pred = fitted.predict(X_te)
+            if task_type == "regression":
+                fold_metrics.append(regression_metrics(y_te, pred))
+            else:
+                proba = None
+                if hasattr(fitted, "predict_proba"):
+                    proba = fitted.predict_proba(X_te)
+                    if task_type == "binary" and proba.ndim > 1:
+                        proba = proba[:, 1]
+                fold_metrics.append(classification_metrics(y_te, pred, proba))
+        except Exception:  # noqa: BLE001
+            continue
+    if not fold_metrics:
+        return float("-inf")
+    agg = aggregate_folds(fold_metrics)
+    key = primary_metric(task_type)
+    score = agg.get(key, {}).get("mean")
+    if score is None or (isinstance(score, float) and score != score):
+        fallback = agg.get("balanced_accuracy", {}).get("mean") or 0.0
+        return float(fallback)
+    if task_type == "regression":
+        return -float(score)
+    return float(score)
 
 
 def _mem_gb() -> float:
