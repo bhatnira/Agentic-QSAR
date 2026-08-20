@@ -74,7 +74,7 @@ def decide_next(
     )
     if candidates_remaining <= 0 and len(experiments) > 0:
         reasons.append("no unexplored applicable strategies remain")
-    if llm_stop and llm_stop.get("should_stop"):
+    if llm_stop and llm_stop.get("should_stop") and len(experiments) >= 2:
         reasons.append(llm_stop.get("reason", "LLM judged further experimentation not worthwhile"))
     if reasons:
         logger.info("Stopping decision: %s", "; ".join(reasons))

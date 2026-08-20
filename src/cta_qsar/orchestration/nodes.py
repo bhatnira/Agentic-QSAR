@@ -544,6 +544,17 @@ def decide_next_action(state: dict[str, Any]) -> str:
     llm_stop: dict[str, Any] | None = None
     if llm is not None:
         try:
+            recent = [
+                {
+                    "id": r.get("id"),
+                    "representation": r.get("representation"),
+                    "model": r.get("model"),
+                    "split": r.get("split"),
+                    "result": r.get("result"),
+                    "metrics": r.get("metrics", {}),
+                }
+                for r in (_plain(e) for e in experiments)
+            ][-3:]
             stop = llm.decide_stop(
                 {
                     "experiments_remaining": max(
@@ -553,6 +564,7 @@ def decide_next_action(state: dict[str, Any]) -> str:
                     ),
                     "no_improvement_rounds": no_improvement_rounds,
                     "budget": budget_info,
+                    "recent_experiments": recent,
                 }
             )
             if stop.should_stop:

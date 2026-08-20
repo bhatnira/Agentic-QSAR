@@ -179,8 +179,28 @@ def test_decide_next_action_finalizes_on_llm_stop(monkeypatch: pytest.MonkeyPatc
         "cta_qsar.orchestration.nodes.get_context",
         lambda: type("Ctx", (), {"llm": llm})(),
     )
-    decision = decide_next_action(_routing_state())
+    # veto only applies once at least two experiments exist (else a single
+    # weak first round could never be compared against anything)
+    state = _routing_state(
+        experiments=[{"result": "completed", "metrics": {}}, {"result": "completed", "metrics": {}}]
+    )
+    decision = decide_next_action(state)
     assert decision == "finalize_report"
+
+
+def test_decide_next_action_ignores_llm_stop_with_one_experiment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cta_qsar.orchestration.nodes import decide_next_action
+
+    llm = _StubLLM(should_stop=True)
+    monkeypatch.setattr(
+        "cta_qsar.orchestration.nodes.get_context",
+        lambda: type("Ctx", (), {"llm": llm})(),
+    )
+    state = _routing_state(
+        experiments=[{"result": "completed", "metrics": {}}],
+        candidates=[{"utility": 1.0}, {"utility": 1.0}],
+    )
+    assert decide_next_action(state) == "plan_experiment"
 
 
 def test_decide_next_action_survives_llm_failure(monkeypatch: pytest.MonkeyPatch) -> None:

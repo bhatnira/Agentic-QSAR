@@ -76,8 +76,17 @@ def torsion_fingerprints(smiles: list[str], n_bits: int = 2048) -> np.ndarray:
     for mol in _mols(smiles):
         if mol is None:
             raise ChemistryError("Cannot fingerprint invalid molecule (see standardization)")
-        vectors.append(Torsions.GetHashedTopologicalTorsionFingerprintAsBitVect(mol, nBits=n_bits))
-    return _to_array(vectors)
+        # The bit-vect torsion API was removed in modern RDKit; use the
+        # identity IntVect and hash the torsion IDs into a fixed-width bit
+        # array deterministically.
+        ids = Torsions.GetTopologicalTorsionFingerprintAsIntVect(mol)
+        arr = np.zeros(n_bits, dtype=np.uint8)
+        for idx in ids.GetNonzeroElements():
+            arr[int(idx) % n_bits] = 1
+        vectors.append(arr)
+    if not vectors:
+        return np.zeros((0, n_bits), dtype=np.uint8)
+    return np.stack(vectors)
 
 
 def tanimoto_similarity_matrix(fps: np.ndarray) -> np.ndarray:
