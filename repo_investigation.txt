@@ -586,6 +586,159 @@ idempotent); docs updated in README.md ("Knowledge & evidence layer"
 section + project layout) and docs/reproducibility.md ("Planning
 transparency").
 
+13. TRUST-GATE DEBUG FIXES + PAPER CAMPAIGN (2026-08-20)
+--------------------------------------------------------------------------------
+Two real bugs found while mass-running the 5-seed paper campaign; both fixed,
+committed as e8e7511, pushed. Causes found by reading the live logs, then
+reproducing single runs with tracebacks.
+
+Bug 1: trust_verdicts written but never declared as a graph channel.
+  evaluate_trust set state["trust_verdicts"] (nodes.py:504) but QSARState had
+  no such field; LangGraph drops undeclared keys when merging node outputs, so
+  the trust gate always saw verdicts={} and could never pass on any axis.
+  Evidence in logs: "[trust] verdicts: {...}" immediately followed by
+  "trust gate: finalize blocked, awaiting predictive, generalization,
+  robustness, applicability_domain (verdicts={})". The 4 required axes come
+  from configs/default.yaml trust block (predictive, generalization,
+  robustness, applicability_domain) -- not the TrustConfig class default
+  (["predictive","generalization"]); the class default is only used when no
+  config yaml applies. Fix: added trust_verdicts: dict[str,str] to
+  QSARState (core/state.py:63).
+
+Bug 2: finalize_report crash when the final planning round selected no
+  candidate. plan-trace code did state.get("selected_candidate", {}).get(...)
+  but the stored value was None (budget/candidate exhaustion with the gate
+  active) -> AttributeError 'NoneType' object has no attribute 'get'.
+  Harness caught it as "FAILED: 'NoneType' object has no attribute 'get'"
+  (2 occurrences, paper_run_1.log lines ~12536/23951). Fix: selected =
+  state.get("selected_candidate") or {} in nodes.py finalize_report trace.
+
+Gate behavior verified after fixes: verdicts propagate, gate logs real dicts,
+blocks only when required axes lack good/wide, and always yields to budget or
+candidate exhaustion (no infinite loops; no-candidate branch sets
+candidates_remaining<=0). Gate ON smoke: 5 completed experiments vs 2 with
+gate OFF. Note: classification (binary/multiclass) runs cannot satisfy the
+"predictive"/"generalization" verdict axes under the current thresholds
+(classification_metrics provides no r2), so gate-on binary runs conservatively
+run to full budget -- documented, not changed, to keep the running campaign
+results coherent.
+
+Harness additions in the same commit:
+  - --resume flag (skip combos already present in the most recent results.csv;
+    results.csv is only written at end-of-campaign, so is of limited use for
+    killed runs).
+  - benchmarks/analyze_results.py: picks the latest stamp covering >=90% of
+    the requested seed x scenario x dataset grid; Wilcoxon signed-rank paired
+    stats; per-task direction handling; outputs table_primary.csv /
+    table_efficiency.csv / table_ablation.csv / stats_paired.txt /
+    summary.json under benchmarks/analysis/<stamp>/. (ruff --fix needed on
+    first pass; .gitignore had to allow !benchmarks/analyze_results.py.)
+  - .gitignore: added exception for analyze_results.py.
+
+Campaign operations:
+  - First launch (paper_run_1.log, pid 52487; nvidia pid 52621) ran under the
+    two bugs above -> discarded (results.csv written only at campaign end).
+  - Relaunched with fixed code: pid 54055 (grid,agent-mock,agent-nosearch,
+    agent-nogate; seeds 0-4; 6 datasets; --fresh-evidence) -> paper_run_2.log,
+    and pid 54314 (agent-nvidia; seeds 0-4) -> paper_run_nvidia2.log. NVIDIA
+    run requires .env sourced into the shell (key check reads os.environ).
+  - Evidence store starts EMPTY for every scenario (--fresh-evidence) = the
+    paper's knowledge-free condition.
+  - 20260820-0123/0124 were recreated after accidental `rm -rf
+    benchmarks/results/2026*`; campaigns write stamp dirs only at the end, so
+    the recreated dirs let in-flight campaigns persist (names are cosmetic;
+    analysis picks the fittest stamp).
+  - Progress at last check: 81/120 core runs, 24/30 nvidia runs (~10h in;
+    agent runs 8-13 min avg, up to ~20 min with the gate). No FAILED lines in
+    the fixed campaign.
+
+14. EXTENSIONS: MULTICLASS / MULTITASK / OPENADMET (2026-08-20)
+--------------------------------------------------------------------------------
+User requested: multiclass, multi-target, mixed datasets, OpenADMET.
+Scope answer after reading the code: multiclass partially built (detector +
+runner branches + trust plugins referenced task_type "multiclass"), multitask
+only a detection stub (list-shaped cells), mixed = by-design single endpoint
+per run, OpenADMET not present anywhere. Implemented multiclass + multitask +
+OpenADMET/tox21/pampa3 datasets; committed as 7db4b85 (code+tests+paper
+draft), pushed.
+
+Endpoint detection:
+  - detect_endpoint() now accepts target_columns; 2+ aligned columns with a
+    uniform task type -> multitask_binary / multitask_regression
+    (n_targets, target_columns recorded). Mixed or multiclass-collection is
+    rejected (falls back to single-column detection). (endpoints/detector.py)
+  - Config: DatasetConfig.target_columns; QSARState.target_columns;
+    profiler_agent routes target_columns into detection + quality_report
+    (base task type via removeprefix("multitask_")).
+
+Runner (experiments/runner.py):
+  - __init__ normalizes task_type: multitask_* -> base task + is_multitask.
+  - run(target_columns=...) delegates to _run_multitask when multitask:
+    per-target estimators under shared folds / shared hyperparameter search /
+    shared row masks (rows missing ANY target are dropped, keyed provenance);
+    per-target trust outputs merged via _merge_multitask_trust (metric means
+    averaged, stds conservative max, scalars from first); record.tags carries
+    targets + per_target_primary; primary_value = mean primary across tasks.
+  - _build_estimator gains y=... and feeds n_classes=int(n_unique) for
+    multiclass (was None -> default 2 for binary only).
+  - _pick_hyperparams gains targets=[...]; grid-search scoring averages
+    _fold_primary_score across targets.
+  - trust/base.classification_metrics: adaptive F1 macro-vs-binary by
+    n_classes (multiclass crashed with average="binary"); F2 uses avg too.
+    multiclass primary_metric = "mcc" (unchanged, threshold-free).
+
+Benchmark harness (run_benchmark.py):
+  - BenchmarkDataset gains target_columns + url fields; loaders fetch to
+    benchmarks/data/ (deepchem S3 for standard files; direct URL for others).
+  - New datasets:
+      tox21   multitask_binary   MoleculeNet tox21.csv.gz, 12 assays
+      pampa3  multiclass (3)     NCATS PAMPA pH7.4 Phenotype (netknowledge
+                                  mirror), 2033 compounds
+      pxr     regression         OpenADMET PXR pEC50 train (HF), 4139 cmpds
+    (CYP2C9/3A4 AID1851 was the original multiclass pick but PubChem PUG/FTP
+    export returned 400/404; pampa3's Phenotype is a genuine 3-class target.)
+  - run_baseline: base task grid; multitask scores = mean of per-target
+    fold scores; multiclass grid added; loader now keeps the original target
+    column name (the old "target" rename only survived via the profiler's
+    column-candidate fallback and broke the baseline path for pxr).
+  - _primary: multiclass -> mcc; multitask_binary -> roc_auc; _better
+    unchanged (lower-better only for rmse).
+
+Knowledge layer: untouched by design (new task types just make new
+dataset-class buckets; no static priors for them -> knowledge-neutral).
+
+Tests: tests/unit/test_extensions.py (7 tests) -- multitask detection
+(uniform/single/mixed), multitask binary + regression runner e2e (aggregated
+roc_auc == mean of per-target primaries, tags), _merge_multitask_trust
+(mean/max), multiclass runner e2e (mcc primary, n_classes). Full unit suite
+(124 tests) green; ruff clean after fixes (seed of the smoke reruns).
+
+End-to-end smoke (seed 0, grid + agent-mock, --fresh-evidence; stamps
+deleted after verification so analysis stays clean):
+
+  dataset   grid      agent-mock  agent model (split)
+  tox21     0.703     0.739       rdkit_fp+extra_trees[scaffold]
+  pampa3    0.310     0.307       morgan+xgboost[random]
+  pxr       1.184     0.842       maccs+xgboost[scaffold]
+
+  Zero failed experiments in the fixed campaign paths; trust gate logged real
+  verdicts on ps-xx/cip pxr and tox21 runs; per-target tags visible. Agent
+  advantage largest on the hardest split (pxr scaffold xgboost vs ridge grid).
+
+Paper: draft at paper/2026-08-20_agentic-qsar.txt (413 -> ~460 lines),
+committed. Contains abstract, intro, full methods (utility model, trust axes,
+KG layer, protocol incl. the 5 scenarios), results skeletons (5 tables, 26
+FILL: cells), discussion outline, limitations, reproducibility record
+(commits e8e7511 + 7db4b85, campaign commands, extension commands). Section 6
+= extensions (pampa3/tox21/pxr + smoke table + implementation notes);
+adds a multitask-aggregation-limitation caveat. Results cells (**FILL:**) are
+replaced after the paper + extension campaigns complete and analysis runs.
+
+Next steps (recorded, not yet run): fill Tables 1-5 when paper_run_2.log +
+paper_run_nvidia2.log finish; run the extension campaign
+(--datasets tox21,pampa3,pxr --seeds 0-4 --scenarios grid,agent-mock
+--fresh-evidence); finalize the txt; update section 13/14 numbers.
+
 ================================================================================
 END OF REPORT
 ================================================================================
