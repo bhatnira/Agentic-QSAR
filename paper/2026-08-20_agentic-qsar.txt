@@ -387,11 +387,65 @@ numbers).
   confidence intervals.
 
 --------------------------------------------------------------------------------
-6  REPRODUCIBILITY
+6  EXTENSION: MULTICLASS, MULTITASK, AND OPENADMET DATASETS
+--------------------------------------------------------------------------------
+
+Beyond the six single-target regression/binary datasets of the core campaign,
+we extended the harness to three additional task archetypes:
+
+  * pampa3 (multiclass): NCATS PAMPA permeability at pH 7.4, 2033 compounds,
+    three ordered classes (Low / Moderate / High permeability); primary
+    metric: Matthews correlation coefficient (MCC, higher is better). Source:
+    netknowledge.github.io ADMET mirror of the NCATS PAMPA assay.
+  * tox21 (multitask binary): 8014 compounds, 12 aligned nuclear-receptor /
+    stress-response assay endpoints; primary metric: mean ROC-AUC across the
+    12 tasks (identical folds shared across targets). Source: MoleculeNet
+    (deepchemdata S3).
+  * pxr (OpenADMET): PXR induction pEC50, 4139 compounds from the OpenADMET
+    PXR blind-challenge training split; primary metric: RMSE. Source:
+    huggingface.co/datasets/openadmet (openadmet/pxr-challenge-train-test).
+
+Implementation. Endpoint detection now recognizes 2+ aligned target columns as
+a multitask endpoint (uniform task type required; Tox21-style). The experiment
+runner trains one estimator per target under shared folds, shared
+hyperparameter search, and shared row masks; trust outputs are merged per
+metric (means averaged, stds kept at the maximum), and planner/budget cost
+estimates inherit the base task treatment. Multiclass (n_classes up to 12)
+is fully wired through models (n_classes fed to estimators), metrics (adaptive
+binary/macro F, MCC as primary), and the trust evaluator. No changes were
+required in the knowledge evidence layer: new task types simply produce their
+own dataset-class buckets.
+
+Preliminary single-seed smoke results (seeds 0, to be replaced by the full
+5-seed campaign):
+
+  dataset   task            grid     agent-mock   agent model (split)
+  -------   ------------    ------   ----------   ------------------------
+  tox21     multitask_binary 0.703   0.739        rdkit_fp+extra_trees[scaffold]
+  pampa3    multiclass       0.310   0.307        morgan+xgboost[random]
+  pxr       regression       1.184   0.842        maccs+xgboost[scaffold]
+
+(FILL: final table + pairwise stats after the 5-seed extension campaign.)
+
+Remarks. (i) The single-seed numbers suggest the agent's advantage is largest
+on more difficult splits (pxr: scaffold-validated xgboost vs ridge grid) and
+neutral on an already-easy multiclass problem. (ii) On tox21 the agent's
+hyperparameter search + scaffold-split validation exceeds the static RF grid
+with four grid points. (iii) Multitask aggregation via mean primary keeps
+the trust gate unchanged: verdicts are computed on the aggregated metrics.
+
+Limitation: the multitask runner aggregates per-target metrics rather than
+fitting a shared-parameter multitask model; representation sharing across
+targets is therefore implicit (same representation matrix) rather than
+parameterized.
+
+--------------------------------------------------------------------------------
+7  REPRODUCIBILITY
 --------------------------------------------------------------------------------
 
 - Repository: https://github.com/bhatnira/Agentic-QSAR (commit e8e7511 for the
-  campaign code; campaign launched with the trust-gate channel fix).
+  campaign code; campaign launched with the trust-gate channel fix; commit
+  7db4b85 adds the multiclass/multitask/OpenADMET extension).
 - Environment: macOS, Python 3.14, RDKit 2025.09.x; dependency pins in
   pyproject.toml.
 - Command (core scenarios):
@@ -400,6 +454,11 @@ numbers).
       --seeds 0,1,2,3,4 --scenarios grid,agent-mock,agent-nosearch,agent-nogate \
       --fresh-evidence
   NVIDIA scenario adds --scenarios agent-nvidia (NVIDIA_API_KEY in env).
+- Extension campaign (multiclass/multitask/OpenADMET; --fresh-evidence keeps
+  the same knowledge-free start condition):
+    python3 benchmarks/run_benchmark.py \
+      --datasets tox21,pampa3,pxr \
+      --seeds 0,1,2,3,4 --scenarios grid,agent-mock --fresh-evidence
 - Analysis:
     python3 benchmarks/analyze_results.py --seeds 0,1,2,3,4
 - Every agent run emits run_dir/plan_trace.jsonl (one line per planning
