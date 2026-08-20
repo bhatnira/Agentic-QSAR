@@ -511,6 +511,73 @@ may still be set in .env to override the default sqlite URI; the live LLM's
 executive summary may occasionally misstate units (e.g. "135 GB" for a
 0.135 GB memory reading) -- the underlying report.json figures are correct.
 
+12. KNOWLEDGE GRAPH EVIDENCE LAYER (2026-08-20)
+--------------------------------------------------------------------------------
+New package src/cta_qsar/knowledge/ (facts, ingestor, static_builder,
+curated_loader, explain) implementing the read-only knowledge/evidence layer.
+No AlphaEvolve material was ever present or added; any strategy-refinement
+flavour is framed as evaluation-conditioned priors (winner-boost + adjacency
+via sibling splits in the candidate pool).
+
+Design (facts-not-embeddings, plain JSONL/triples, no vector store):
+  - EvidenceStore: windowed (WINDOW_SIZE=20) append-only triples
+    (subject, predicate, object) with per-entry value/run_id/sign; merges are
+    idempotent per run_id; persistence via benchmarks/knowledge/evidence.jsonl
+    (git-ignored artifact, rebuilt by benchmarks/run_benchmark.py refresh).
+    Keys are (subject,predicate,object) tuples internally so dataset classes
+    containing "|" cannot collide (early string-key bug caught by tests).
+  - dataset_class(task, n_rows) buckets tiny/<500, small/<2000, medium/<5000,
+    large; evidence transfers across same-bucket datasets (e.g. esol+freesolv
+    pool into regression|small).
+  - facts_for(): finest cells (level 4 class x scenario x strategy) with
+    n>=min_n (default 2), falling back to predicate-level ("*") and class
+    aggregates; exclude_predicate supports drop-one counterfactuals.
+  - best_for/edge_exists query API; sign tracks higher-vs-lower-is-better
+    (rmse/mae -> -1, auc/f1 -> +1) so ranking is metric-correct.
+  - Ingestors: results.csv rows are written at 3 granularities (fine,
+    scenario-any, class-any); experiments.jsonl supports per-record runs;
+    re-ingestion is idempotent.
+  - Static builder: walks registries (skips unavailable plugins such as
+    lightgbm which raise on instantiation) emitting is_kind/cost_tier/
+    requires/supports/applicable facts; registry_version() fingerprints the
+    catalog for invalidation.
+  - Curated YAML: 13 physchem/statistical priors with citable sources
+    (Delaney ESOL, Leeson & Springthorpe, Wager et al., Vapnik/ESL, ...).
+  - Explain: template-generated (LLM-free) evidence board, decision trace
+    renderer, counterfactual_report, append_trace -> run_dir/plan_trace.jsonl;
+    final report now carries planning_evidence {dataset_class, evidence_board,
+    facts}.
+
+Planner/nodes wiring:
+  - experiments/planner.py generate_candidates(..., evidence=...):
+    _evidence_bonus_map boosts strategies with proven margin over the class
+    baseline scaled by n; _winner_boost_map gives +0.15 to the best completed
+    strategy from history (adjacency by sibling-split candidates).
+  - agents/planner_agent.py plan(..., kg_context, evidence_facts): evidence
+    board templated into LLM select_strategy payload as evidence_context;
+    heuristic ranking uses raw facts; logged as "Knowledge-graph context".
+  - orchestration/nodes.py plan_experiment loads the store (read-only) when
+    config.knowledge.evidence_path is set, renders boards, records
+    state[knowledge_context] (declared channel in core/state.py QSARState --
+    undeclared keys are dropped by LangGraph, plan_trace missing until this
+    was added) and finalize_report writes plan_trace.jsonl + report section.
+  - Config gains KnowledgeConfig {evidence_path, min_evidence, enabled}.
+
+Benchmark integration:
+  - run_benchmark.py refresh_evidence() builds the store from all existing
+    results dirs before a campaign, feeds config.knowledge.evidence_path to
+    every agent scenario, and re-ingests the new results.csv after the run --
+    evidence accumulates across campaigns automatically (idempotent).
+
+Status: 18 new tests (tests/unit/test_knowledge.py) covering windowing,
+idempotency/round-trip, fine->coarse fallback, exclude-counterfactual,
+ingestors, registry+curated facts, evidence-driven candidate ranking
+(boosts utility of proven strategies), winner-boost mapping and template-only
+explain output. Full suite 142 passed; ruff clean. End-to-end smoke: evidence
+board for regression|small rendered into the report and plan_trace.jsonl
+written when evidence_path configured; empty store degrades to "(no
+accumulated evidence)" with unchanged heuristic behavior.
+
 ================================================================================
 END OF REPORT
 ================================================================================

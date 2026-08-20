@@ -88,3 +88,33 @@ tracking server; the default is a local `./mlruns` store.
 The system never fabricates results, chemical interpretations, or literature
 references. The LLM is instructed to cite the evidence it received and to use
 budget-observed-best rather than globally-optimal phrasing.
+
+## Planning transparency (knowledge & evidence layer)
+
+Planner decisions are grounded in an attributed, read-only knowledge graph and
+every decision is auditable (module `cta_qsar.knowledge`):
+
+- **Evidence accumulation.** Every agent run's outcome (primary metric, chosen
+  triple) is ingested into a windowed, append-only store — fine-grained cells
+  keyed by dataset class (`task × size-bucket`), scenario, and strategy, plus
+  coarse aggregates. Merges are idempotent per `run_id` and keep the most
+  recent `WINDOW_SIZE` runs; storage grows only with evidence, never with
+  runner history.
+- **Fine-to-coarse fallback.** Retrieval returns the finest facts with at least
+  `min_n` qualified runs, falling back to scenario-level and class-level
+  aggregates otherwise — so a planner never over-trusts a two-run cell, but
+  still benefits from transferable priors.
+- **Grounding, not authority.** Evidence reallocates the *next evaluation*; it
+  never vetoes one. The LLM prompt's `evidence_context` and the heuristic
+  utility (evidence margin + winner-boost toward the best completed strategy)
+  both remain advisory.
+- **Audit trail.** Each planning round writes a machine-attributable trace to
+  `run_dir/plan_trace.jsonl` (chosen candidate, evidence consulted with source
+  and signed statistics, winner-boost/adjacency deltas), and the final report
+  carries `planning_evidence` (dataset class, rendered evidence board, facts).
+  Counterfactual drop-1 queries are available via
+  `counterfactual_report(store, dataset_class, predicate)`.
+- **Invariants for running experiments.** With no evidence file configured, or
+  for a dataset class with no qualified facts, the planners behave exactly as
+  the pure-heuristic baseline — the knowledge layer is a side-car and cannot
+  change results when absent.

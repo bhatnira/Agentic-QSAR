@@ -109,6 +109,33 @@ run artifacts live in `benchmarks/runs/`. `agent-nvidia` additionally requires
 CSV, TSV, and Parquet are supported. `--smiles-column` and `--target-column`
 are optional — automatic detection is attempted first.
 
+## Knowledge & evidence layer
+
+The pipeline's planners (heuristic and LLM) are guided by an optional,
+read-only knowledge graph of attributed triples — dataset-class evidence,
+registry capabilities, and curated chemistry priors:
+
+- **Evidence facts** are accumulated from every benchmark/agent run
+  (`results.csv`, `experiments.jsonl`) into a windowed, append-only store
+  (`benchmarks/knowledge/evidence.jsonl`), keyed by dataset class
+  (`task × size-bucket`) so knowledge transfers across similar datasets.
+- **Retrieval** degrades from fine-grained cells (`class × scenario × triple`)
+  to coarse aggregates when evidence is thin (`min_n` qualified runs), so
+  planners always get the finest *trustworthy* prior.
+- **Curated priors** (immuno/physchem heuristics with citable sources) and
+  **registry facts** (plugin capabilities/requirements) are merged in.
+- **Grounding** — the evidence board is templated into the planner prompt
+  (`evidence_context`) and into the heuristic utility score; it never triggers
+  evaluations, only reallocates the next one.
+- **Explainability** — every decision is recorded as a machine-attributable
+  trace (`run_dir/plan_trace.jsonl`) plus a rendered evidence board and
+  drop-1 counterfactuals in the final report; the LLM is never the source of
+  justification.
+
+Enable with `knowledge.evidence_path` in the config (the benchmark harness
+maintains the store automatically); when absent the planners fall back to
+pure heuristics and behavior is unchanged.
+
 ## Project layout
 
 ```
@@ -125,6 +152,7 @@ src/cta_qsar/
     trust/          predictive, generalization, robustness, uncertainty,
                     applicability, explainability, chemical consistency (plugins)
     experiments/    candidate, planner, runner, budget, tracker
+    knowledge/      facts store, static/curated/evidence builders, explain
     diagnosis/      failure rules, hypotheses, interventions
     memory/         experiment memory, provenance
     reporting/      report builder, export

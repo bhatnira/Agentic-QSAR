@@ -69,6 +69,14 @@ class TrackingConfig(BaseModel):
     mlflow_uri: str = ""
 
 
+class KnowledgeConfig(BaseModel):
+    """Knowledge/evidence layer settings (read-only planner priors)."""
+
+    evidence_path: str = ""
+    min_evidence: int = 2
+    enabled: bool = True
+
+
 class Config(BaseModel):
     """Top-level CTA-QSAR configuration."""
 
@@ -92,6 +100,7 @@ class Config(BaseModel):
     reporting: dict[str, Any] = Field(
         default_factory=lambda: {"format": "markdown", "output_dir": "runs"}
     )
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     tracking: TrackingConfig = Field(default_factory=TrackingConfig)
     env_overrides: ClassVar[dict[str, str]] = {
         "LLM_PROVIDER": "llm.provider",

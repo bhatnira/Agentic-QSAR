@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "benchmarks" / "data"
 RUNS_ROOT = ROOT / "benchmarks" / "runs"
 RESULTS_ROOT = ROOT / "benchmarks" / "results"
+KNOWLEDGE_EVIDENCE = ROOT / "benchmarks" / "knowledge" / "evidence.jsonl"
 DATASET_DIR_URL = "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets"
 
 
@@ -204,6 +205,7 @@ def run_agent(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int, *, search:
     config.dataset.smiles_column = dataset.smiles_column
     config.dataset.target_column = dataset.target_column
     config.reporting["output_dir"] = str(RUNS_ROOT)
+    config.knowledge.evidence_path = str(KNOWLEDGE_EVIDENCE)
     data_csv = DATA_DIR / f"{dataset.name}_seed{seed}.csv"
     df.to_csv(data_csv, index=False)
     scientist = QSARScientist(config)
@@ -236,6 +238,23 @@ def run_agent(df: pd.DataFrame, dataset: BenchmarkDataset, seed: int, *, search:
     }
 
 
+def refresh_evidence(new_results: list[Path] | None = None) -> Any:
+    """Reload + re-ingest all results into the knowledge evidence store.
+
+    Idempotent: merges are keyed by (triple, run_id) with a rolling window, so
+    re-running a benchmark only appends genuinely new runs.
+    """
+    from cta_qsar.knowledge.facts import EvidenceStore
+    from cta_qsar.knowledge.ingestor import ingest_results_file, ingest_results_glob
+
+    store = EvidenceStore.load(KNOWLEDGE_EVIDENCE)
+    ingest_results_glob(store, RESULTS_ROOT)
+    for results_file in new_results or []:
+        ingest_results_file(store, results_file)
+    store.save(KNOWLEDGE_EVIDENCE)
+    return store
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--datasets", default="esol", help="comma-separated subset of esol,freesolv,lipophilicity,bace,bbbp,clintox")
@@ -257,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out_dir = RESULTS_ROOT / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    refresh_evidence()
 
     meta = {
         "timestamp": stamp,
@@ -303,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     results_df.to_csv(out_dir / "results.csv", index=False)
     with (out_dir / "meta.json").open("w") as fh:
         json.dump(meta, fh, indent=2)
+
+    refresh_evidence(new_results=[out_dir / "results.csv"])
 
     summary: dict[str, Any] = {}
     for (dataset, scenario), group in results_df.groupby(["dataset", "scenario"]):

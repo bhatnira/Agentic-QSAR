@@ -37,12 +37,21 @@ def generate_candidates(
     n_samples: int,
     dataset_props: dict[str, Any],
     hardware_tier: str,
+    evidence: list[Any] | None = None,
 ) -> list[ExperimentCandidate]:
-    """Generate and score candidate experiments (no LLM required)."""
+    """Generate and score candidate experiments (no LLM required).
+
+    ``evidence`` is a list of knowledge-layer Facts (Finest-first) used to
+    boost strategies with proven performance on this dataset class; it is
+    advisory only and never blocks a candidate.
+    """
     reps = _resolve_reps(registry, enabled_representations, task_type, n_samples, dataset_props)
     models = _resolve_models(registry, enabled_models, task_type)
     splits = validated_splits or ["random"]
     seen = {_sig(_as_plain(h)) for h in history}
+
+    evidence_bonus = _evidence_bonus_map(evidence or [])
+    winner_boost = _winner_boost_map(history)
 
     candidates: list[ExperimentCandidate] = []
     for rep_name, rep_plugin in reps:
@@ -72,6 +81,8 @@ def generate_candidates(
                     history=seen,
                     dataset_props=dataset_props,
                     hardware_tier=hardware_tier,
+                    evidence_bonus=evidence_bonus.get(f"{rep_name}|{model_name}", 0.0)
+                    + winner_boost.get(f"{rep_name}|{model_name}", 0.0),
                 )
                 candidates.append(candidate)
     candidates.sort(key=lambda c: c.utility, reverse=True)
@@ -135,6 +146,7 @@ def _score_candidate(
     history: set[str],
     dataset_props: dict[str, Any],
     hardware_tier: str,
+    evidence_bonus: float = 0.0,
 ) -> ExperimentCandidate:
     runtime = rep_cost.runtime_seconds + model_cost.runtime_seconds
     memory = rep_cost.memory_gb + model_cost.memory_gb
@@ -155,6 +167,9 @@ def _score_candidate(
         history=history,
         dataset_props=dataset_props,
     )
+    if evidence_bonus:
+        expected_improvement += evidence_bonus
+        reason = f"{reason}; evidence: {evidence_bonus:+.2f}"
     candidate = ExperimentCandidate(
         representation=rep_name,
         model=model_name,
@@ -240,6 +255,78 @@ def _heuristic_expectations(
         min(trust_gain, 0.95),
         reason,
     )
+
+
+def _evidence_bonus_map(evidence: list[Any]) -> dict[str, float]:
+    """Rank strategies with proven performance (fine facts) over class baseline.
+
+    Facts carry attrs {mean, std, n, sign}: score = signed mean; boost is the
+    margin over the class aggregate, scaled by evidence volume.
+    """
+    if not evidence:
+        return {}
+    facts = [f for f in evidence if getattr(f, "attrs", {})]
+    baseline: float | None = None
+    for fact in facts:
+        if getattr(fact, "object", "") == "*" and getattr(fact, "predicate", "") == "*":
+            baseline = fact.attrs.get("mean", 0.0) * fact.attrs.get("sign", 1.0)
+    best: dict[str, float] = {}
+    for fact in facts:
+        if getattr(fact, "object", "") in ("*", ""):
+            continue
+        n = fact.attrs.get("n", 0)
+        if n < 2:
+            continue
+        score = fact.attrs.get("mean", 0.0) * fact.attrs.get("sign", 1.0)
+        obj = str(fact.object)
+        rep, _, model = obj.partition("+")
+        model = model.split("[")[0] if "[" in model else model
+        margin = score - (baseline if baseline is not None else 0.0)
+        if baseline is not None and margin >= 0:
+            boost = min(0.25, 0.05 * n + 0.05 * margin)
+        else:
+            boost = 0.03 * n if rep and model else 0.0
+        key = f"{rep}|{model}"
+        best[key] = max(best.get(key, 0.0), boost)
+    return best
+
+
+def _winner_boost_map(history: list[Any]) -> dict[str, float]:
+    """Adjacency + winner boost around the current best completed experiment.
+
+    The winner's exact (representation, model) gets a small boost so the loop
+    refines near proven performance; sibling splits of the same strategy are
+    already present in the candidate pool (adjacency by construction).
+    """
+    plain = [_as_plain(h) for h in history if hasattr(h, "model_dump") or isinstance(h, dict)]
+    completed = [r for r in plain if r.get("result") == "completed"]
+    if not completed:
+        return {}
+    best_run: dict[str, Any] | None = None
+    for record in completed:
+        value = record.get("primary_value")
+        if value is None:
+            continue
+        primary = record.get("primary") or "rmse"
+        sign = 1.0 if _higher_is_better(primary) else -1.0
+        score = sign * float(value)
+        if best_run is None or score > best_run["_score"]:
+            best_run = {**record, "_score": score}
+    if best_run is None:
+        return {}
+    winner_rep = best_run.get("representation", "")
+    winner_model = best_run.get("model", "")
+    if not winner_rep or not winner_model:
+        return {}
+    return {f"{winner_rep}|{winner_model}": 0.15}
+
+
+def _higher_is_better(primary: str) -> bool:
+    primary = (primary or "").lower()
+    return any(
+        token in primary
+        for token in ("auc", "acc", "f1", "recall", "kappa", "truth", "balanced", "precision")
+    ) and not any(t in primary for t in ("rmse", "mae", "mse"))
 
 
 def _sig(history_row: dict[str, Any]) -> str:

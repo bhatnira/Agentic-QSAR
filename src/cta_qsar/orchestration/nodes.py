@@ -285,6 +285,7 @@ def plan_experiment(state: dict[str, Any]) -> dict[str, Any]:
     from cta_qsar.core.interfaces import QSARCase
     from cta_qsar.experiments.budget import BudgetState
     from cta_qsar.experiments.planner import pick_first_usable
+    from cta_qsar.knowledge.explain import render_evidence_board
 
     registry: PluginRegistry = get_context().registry
     llm = get_context().llm
@@ -309,6 +310,16 @@ def plan_experiment(state: dict[str, Any]) -> dict[str, Any]:
         [e for e in history if _plain(e).get("result") == "completed"]
     )
 
+    knowledge = config.knowledge
+    kg_context = ""
+    evidence_facts: list[Any] = []
+    if knowledge.enabled and knowledge.evidence_path:
+        evidence_facts, kg_context = _load_knowledge_facts(
+            knowledge.evidence_path, case.task_type, case.dataset_size
+        )
+        evidence_facts = evidence_facts or []
+        kg_context = kg_context or render_evidence_board(evidence_facts)
+
     planner = PlannerAgent(registry, llm)
     candidates, llm_refined = planner.plan(
         case=case,
@@ -320,6 +331,8 @@ def plan_experiment(state: dict[str, Any]) -> dict[str, Any]:
         dataset_props={"task_type": case.task_type, "n_rows": case.dataset_size},
         n_samples=case.dataset_size,
         hardware_tier="cpu",
+        kg_context=kg_context,
+        evidence_facts=evidence_facts,
     )
     if llm_refined:
         candidates = llm_refined + [c for c in candidates if c not in llm_refined]
@@ -328,6 +341,13 @@ def plan_experiment(state: dict[str, Any]) -> dict[str, Any]:
     state["candidates"] = [c.model_dump() if hasattr(c, "model_dump") else c for c in candidates]
     state["plan_round"] = state.get("plan_round", 0) + 1
     state["budget_state"] = budget.to_dict()
+    if kg_context or evidence_facts:
+        state["knowledge_context"] = {
+            "dataset_class": _knowledge_dataset_class(case),
+            "facts": [f.to_dict() for f in evidence_facts],
+            "rendered": kg_context,
+            "round": state.get("plan_round", 0),
+        }
     if chosen is None:
         if budget.experiments_done >= budget.max_experiments:
             state["stop_reasons"] = ["experiment budget exhausted"]
@@ -645,6 +665,13 @@ def finalize_report(state: dict[str, Any]) -> dict[str, Any]:
         stop_reasons=stop_reasons or ["stopping rule triggered"],
         llm_summary=summary,
     )
+    knowledge_context = state.get("knowledge_context")
+    if knowledge_context:
+        report["planning_evidence"] = {
+            "dataset_class": knowledge_context.get("dataset_class"),
+            "evidence_board": knowledge_context.get("rendered", ""),
+            "facts": knowledge_context.get("facts", []),
+        }
     if llm is not None:
         try:
             report["executive_summary"] = llm.summarize(
@@ -662,6 +689,22 @@ def finalize_report(state: dict[str, Any]) -> dict[str, Any]:
     with open(run_dir / "experiments.jsonl", "w", encoding="utf-8") as fh:
         for rec in plain:
             fh.write(json.dumps(rec, default=str) + "\n")
+    knowledge_context = state.get("knowledge_context")
+    if knowledge_context:
+        from cta_qsar.knowledge.explain import append_trace
+
+        append_trace(
+            {
+                "round": knowledge_context.get("round", 0),
+                "chosen": state.get("selected_candidate", {}).get("representation", ""),
+                "reason": state.get("selected_candidate", {}).get("reason", ""),
+                "evidence": knowledge_context.get("facts", []),
+                "winner": None,
+                "winner_boost": None,
+                "adjacency": [],
+            },
+            run_dir / "plan_trace.jsonl",
+        )
     provenance = {
         "run_id": run_id,
         "dataset": state.get("data_path"),
@@ -682,6 +725,23 @@ def finalize_report(state: dict[str, Any]) -> dict[str, Any]:
     state["stop_reasons"] = [*(state.get("stop_reasons") or []), *stop_reasons]
     agent_log("finalize", f"report written to {run_dir}")
     return state
+
+
+def _load_knowledge_facts(evidence_path: str, task_type: str, n_rows: int) -> tuple[list[Any], str]:
+    """Load evidence facts for this dataset class from the store (read-only)."""
+    from cta_qsar.knowledge.explain import render_evidence_board
+    from cta_qsar.knowledge.facts import EvidenceStore, dataset_class
+
+    store = EvidenceStore.load(evidence_path)
+    cls = dataset_class(task_type, n_rows)
+    facts = store.facts_for(cls)
+    return facts, render_evidence_board(facts)
+
+
+def _knowledge_dataset_class(case: Any) -> str:
+    from cta_qsar.knowledge.facts import dataset_class
+
+    return dataset_class(case.task_type, case.dataset_size)
 
 
 def _plain(record: Any) -> dict[str, Any]:

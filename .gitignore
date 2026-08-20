@@ -24,5 +24,5 @@ htmlcov/
 
 *.log
 *.parquet.tmp
-benchmarks/
+benchmarks/*
 !benchmarks/run_benchmark.py

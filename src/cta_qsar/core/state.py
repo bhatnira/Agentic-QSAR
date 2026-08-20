@@ -50,6 +50,7 @@ class QSARState(TypedDict, total=False):
     candidates: list[ExperimentCandidate]
     selected_candidate: ExperimentCandidate
     rejected_candidates: list[ExperimentCandidate]
+    knowledge_context: dict[str, Any]
 
     # -- execution
     experiments: list[ExperimentRecord]

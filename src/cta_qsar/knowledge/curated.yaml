@@ -1,0 +1,69 @@
+# Curated medicinal-chemistry knowledge edges.
+# subject | predicate | object | source (citable literature)
+# These are static priors used only to *prioritize* planner exploration; they
+# never constitute a claim of ground truth on any specific endpoint.
+
+- subject: lipophilicity
+  predicate: correlates_with
+  object: clogp_descriptors
+  source: "Leeson & Springthorpe, Nat. Rev. Drug Discov. 2007"
+
+- subject: solubility
+  predicate: driven_by
+  object: molecular_weight
+  source: "Delaney, J. Chem. Inf. Comput. Sci. 2004 (ESOL)"
+
+- subject: solubility
+  predicate: driven_by
+  object: h_bond_donors
+  source: "Delaney, J. Chem. Inf. Comput. Sci. 2004 (ESOL)"
+
+- subject: solubility
+  predicate: driven_by
+  object: topological_polar_surface_area
+  source: "Delaney, J. Chem. Inf. Comput. Sci. 2004 (ESOL)"
+
+- subject: logp
+  predicate: summarizes_into
+  object: solubility_model
+  source: "Lipinski, Adv. Drug Deliv. Rev. 2004"
+
+- subject: bbb
+  predicate: correlates_with
+  object: lipophilicity
+  source: "Wager et al., ACS Chem. Neurosci. 2010"
+
+- subject: bbb
+  predicate: correlates_with
+  object: molecular_weight
+  source: "Hitchcock & Pennington, J. Med. Chem. 2006"
+
+- subject: permeability
+  predicate: correlates_with
+  object: mpsa
+  source: "Kelder et al., Pharm. Res. 1999"
+
+- subject: binary_classification
+  predicate: benefits_from
+  object: class_weighted_models
+  source: "King & Zeng, Sociol. Methodol. 2001 (rare-events)"
+
+- subject: small_dataset
+  predicate: prefers
+  object: simple_models
+  source: "Vapnik statistical learning theory; Friedman et al., ESL"
+
+- subject: large_dataset
+  predicate: benefits_from
+  object: gradient_boosting
+  source: "Chen & Guestrin, KDD 2016; Ke et al., NeurIPS 2017"
+
+- subject: scaffold_split
+  predicate: provides
+  object: generalization_evidence
+  source: "Sheridan, J. Chem. Inf. Model. 2012"
+
+- subject: active_learning
+  predicate: needs
+  object: budget_aware_search
+  source: "Settles, Active Learning Literature Survey 2009"

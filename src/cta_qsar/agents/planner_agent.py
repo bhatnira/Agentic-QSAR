@@ -34,8 +34,15 @@ class PlannerAgent:
         dataset_props: dict[str, Any],
         n_samples: int,
         hardware_tier: str,
+        kg_context: str = "",
+        evidence_facts: list[Any] | None = None,
     ) -> tuple[list[ExperimentCandidate], list[ExperimentCandidate]]:
-        """Return (ranked_candidates, rejected_candidates)."""
+        """Return (ranked_candidates, rejected_candidates).
+
+        ``kg_context`` is a rendered knowledge-graph digest (see
+        knowledge.explain.render_evidence_board) grounded into the LLM prompt;
+        ``evidence_facts`` are the raw Facts used for heuristic re-ranking.
+        """
         candidates = generate_candidates(
             registry=self.registry,
             case=case,
@@ -48,9 +55,12 @@ class PlannerAgent:
             n_samples=n_samples,
             dataset_props=dataset_props,
             hardware_tier=hardware_tier,
+            evidence=evidence_facts or [],
         )
         usage = explain_decisions(candidates)
         logger.info("Candidate planning:\n%s", usage)
+        if kg_context:
+            logger.info("Knowledge-graph context:\n%s", kg_context)
 
         llm_refinement: list[ExperimentCandidate] = []
         if self.llm is not None:
@@ -61,6 +71,7 @@ class PlannerAgent:
                         "ranked_candidates": [c.model_dump() for c in candidates[:8]],
                         "history": history[-5:],
                         "budget": budget.to_dict(),
+                        "evidence_context": kg_context,
                     }
                 )
                 llm_refinement = _llm_plan_to_candidates(
