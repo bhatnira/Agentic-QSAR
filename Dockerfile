@@ -1,5 +1,5 @@
 # CTA-QSAR — CPU-first container.
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 
